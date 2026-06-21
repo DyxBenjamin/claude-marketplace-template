@@ -35,6 +35,7 @@
       <ul>
         <li><a href="#use-this-template">Use this template</a></li>
         <li><a href="#placeholders-to-change">Placeholders to change</a></li>
+        <li><a href="#test-it-locally">Test it locally</a></li>
         <li><a href="#enable-the-release-pipeline">Enable the release pipeline</a></li>
         <li><a href="#your-first-release">Your first release</a></li>
       </ul>
@@ -97,7 +98,7 @@ Search the repo for `CHANGE_ME` and replace each one. Here's where they live:
 | File | Field | What to set it to |
 | --- | --- | --- |
 | `.claude-plugin/marketplace.json` | `name` | Your marketplace name (used in the install command). Currently `my-marketplace`. |
-| `.claude-plugin/marketplace.json` | `owner.name`, `author.name`, `author.email` | You. |
+| `.claude-plugin/marketplace.json` | `owner.name`, `owner.email` | You (the marketplace maintainer). |
 | `plugins/base-plugin/.claude-plugin/plugin.json` | `author.name`, `author.email` | Set the author. Keep the `base-plugin` name or rename it. |
 | `CLAUDE.md` | `plugin.json` template author | Your name and email. |
 | `README.md` | install commands, Contact, the template-credit link | Your repo URL, marketplace name and contact. |
@@ -105,7 +106,24 @@ Search the repo for `CHANGE_ME` and replace each one. Here's where they live:
 > [!Important]
 > If you rename `plugins/base-plugin/`, also rename its entry in `marketplace.json` and `.release-please-manifest.json`. (CI keeps them in sync after the first push, but fixing them up front avoids a stray entry.)
 
-### 3. Enable the release pipeline
+### 3. Test it locally
+
+Before publishing, load the plugin straight from disk - no marketplace needed:
+
+```sh
+claude --plugin-dir ./plugins/base-plugin
+```
+
+In that session, run `/base-plugin:skill-creator` to confirm the skill loads, and `/reload-plugins` to pick up edits without restarting. Validate the manifests the same way CI does (the `Validate` workflow runs this on every push and PR):
+
+```sh
+claude plugin validate .                      # marketplace.json
+claude plugin validate ./plugins/base-plugin  # plugin.json + skills/agents/hooks
+```
+
+`claude plugin validate` is a local schema check - no account or network needed. Add `--strict` to treat warnings (like a stray manifest field) as errors.
+
+### 4. Enable the release pipeline
 
 The workflow needs write access to push the sync commit and open Release PRs. No token to create - it uses the built-in `GITHUB_TOKEN`. Under **Settings → Actions → General**:
 
@@ -118,7 +136,7 @@ Skip step 2 or 3 and the run fails with a `403`.
 > [!Note]
 > **You can leave `main` unprotected** - simplest, since the pipeline pushes to `main` itself. Basic protection (restrict deletions, block force pushes) is fine too; neither blocks a normal commit. Only stricter rules - require a PR, restrict updates, signed commits or linear history - block the bot's sync push, and a personal repo can't easily exempt it. Keep those off `main`.
 
-### 4. Your first release
+### 5. Your first release
 
 A feature branch isn't required - Release Please triggers on any commit reaching `main` - but see the recommendation below.
 
@@ -207,6 +225,8 @@ claude-marketplace-template/
 
 To add a plugin, create only `plugins/<name>/.claude-plugin/plugin.json` - `marketplace.json`, the Release Please config and version bumps are all handled by CI.
 
+A plugin can ship far more than the sample skill and hook here - subagents (`agents/`), MCP servers (`.mcp.json`), LSP servers (`.lsp.json`), background monitors, output styles, and more. See [`CLAUDE.md`](CLAUDE.md#what-a-plugin-can-contain) for the full component map, or the [Plugins reference](https://code.claude.com/docs/en/plugins-reference).
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- LICENSE -->
@@ -235,7 +255,7 @@ Project Link: <https://github.com/CHANGE_ME_USERNAME/CHANGE_ME_REPO>
 
 - [Claude Marketplace Template](https://github.com/Nagell/claude-marketplace-template) - the starter this repo was generated from
 - [skill-creator](plugins/base-plugin/skills/skill-creator/) - Anthropic's skill, under Apache-2.0
-- [Claude Code](https://docs.claude.com/en/docs/claude-code)
+- [Claude Code](https://code.claude.com/docs)
 - [Release Please](https://github.com/googleapis/release-please)
 - [Best-README-Template](https://github.com/othneildrew/Best-README-Template)
 
@@ -246,7 +266,7 @@ Project Link: <https://github.com/CHANGE_ME_USERNAME/CHANGE_ME_REPO>
 [license-shield]: https://img.shields.io/badge/license-Unlicense-blue.svg?style=for-the-badge
 [license-url]: ./LICENSE
 [Claude]: https://img.shields.io/badge/Claude_Code-D97757?style=for-the-badge&logo=anthropic&logoColor=white
-[Claude-url]: https://docs.claude.com/en/docs/claude-code
+[Claude-url]: https://code.claude.com/docs
 [Bash]: https://img.shields.io/badge/Bash-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white
 [Bash-url]: https://www.gnu.org/software/bash/
 [GitHubActions]: https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white
