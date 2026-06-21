@@ -1,0 +1,48 @@
+name: Validate
+
+# Catch malformed manifests before they reach main. Runs the same check the
+# Claude Code plugin review pipeline runs: `claude plugin validate`.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate plugins
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The CLI ships `claude plugin validate`, a local schema/syntax check.
+      # It needs no authentication - it never calls the API.
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      # Validate the marketplace catalog (marketplace.json schema, duplicate
+      # plugin names, source path traversal, version mismatches), then each
+      # plugin directory (plugin.json plus skill/agent/command/hook files).
+      # --strict turns warnings (e.g. a misspelled or stray manifest field)
+      # into failures so they're caught before publishing.
+      - name: Validate marketplace and plugins
+        run: |
+          set -euo pipefail
+          echo "::group::Marketplace"
+          claude plugin validate . --strict
+          echo "::endgroup::"
+          for dir in plugins/*/; do
+            [ -f "${dir}.claude-plugin/plugin.json" ] || continue
+            echo "::group::${dir}"
+            claude plugin validate "$dir" --strict
+            echo "::endgroup::"
+          done
