@@ -2,7 +2,7 @@
 	"$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
 	"name": "base-plugin",
 	"version": "0.1.0",
-	"description": "Base plugin for your marketplace. Ships the skill-creator skill, plus a sample hook to replace with your own.",
+	"description": "Example plugin: the skill-creator skill and a sample hook.",
 	"author": {
 		"name": "CHANGE_ME",
 		"email": "CHANGE_ME@example.com"
