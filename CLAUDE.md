@@ -18,6 +18,7 @@ Everything else is automated:
 
 ```json
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "plugin-name",
   "version": "0.1.0",
   "description": "What this plugin does",
@@ -28,6 +29,35 @@ Everything else is automated:
   "keywords": ["relevant", "tags"]
 }
 ```
+
+## What a Plugin Can Contain
+
+`plugin.json` is the only required file, but a plugin can ship much more than the
+skill + sample hook in `base-plugin`. Each lives in a directory at the **plugin
+root** (not inside `.claude-plugin/`) and is auto-discovered:
+
+| Component | Location | What it adds |
+| --- | --- | --- |
+| Skills | `skills/<name>/SKILL.md` | `/plugin:skill` shortcuts Claude can also invoke automatically |
+| Commands | `commands/*.md` | Flat-file skills (use `skills/` for new plugins) |
+| Subagents | `agents/*.md` | Specialized agents shown in `/agents` |
+| Hooks | `hooks/hooks.json` | Event handlers (PreToolUse, PostToolUse, SessionStart, …) |
+| MCP servers | `.mcp.json` | External tools/services via Model Context Protocol |
+| LSP servers | `.lsp.json` | Language-server code intelligence |
+| Monitors | `monitors/monitors.json` | Background watchers that notify Claude |
+| Output styles / Themes | `output-styles/`, `themes/` | Response styling and `/theme` presets |
+| Executables | `bin/` | Binaries added to the Bash tool's `PATH` |
+| Plugin defaults | `settings.json` | `agent` / `subagentStatusLine` defaults when enabled |
+
+Manifest-level extras (in `plugin.json`): `userConfig` (values prompted at enable
+time, e.g. API tokens), `dependencies` (other plugins, with semver ranges),
+`defaultEnabled`, `displayName`, `license`, `homepage`, `repository`.
+
+Reference scripts and configs with `${CLAUDE_PLUGIN_ROOT}` (plugin install dir)
+or `${CLAUDE_PLUGIN_DATA}` (persistent state across updates) — never absolute or
+`../` paths, which break once the plugin is copied to the cache.
+
+Full schemas: <https://code.claude.com/docs/en/plugins-reference>.
 
 ## Commit Convention
 
