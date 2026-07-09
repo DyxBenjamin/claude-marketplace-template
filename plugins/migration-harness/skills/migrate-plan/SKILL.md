@@ -30,11 +30,24 @@ the antidote is many small waves. Drive state through
    you could review, verify, and if necessary roll back in one sitting. Prefer more small waves over
    fewer big ones. Front-load low-risk waves; isolate high-risk units into their own small waves.
 
-3. **Record the plan.** For each wave, `migration.py add-wave --title "<what>"`; for each unit,
+3. **Record the plan — persistently.** For each wave, `migration.py add-wave --title "<what>"
+   --risk low|med|high [--gate]`: record the wave's risk, and set `--gate` on any wave that needs a
+   human sign-off before it runs (at minimum the first high-risk wave and cleanup). For each unit,
    `migration.py add-unit --wave <id> --paths <a,b> --risk low|med|high --depends <unit-ids>
-   --title "<what>"`. Every unit needs an explicit **success criterion**: the concrete test or check
-   that will prove it migrated correctly (a passing test file, a green typecheck, a characterization
-   match). If no such check exists yet, note it — safeguard must create it before this unit runs.
+   --title "<what>" --success "<criterion>"`. Every unit needs an explicit **success criterion**,
+   passed via `--success`: the concrete test or check that will prove it migrated correctly (a passing
+   test file, a green typecheck, a characterization match). Persist risk, gate, and success in the
+   manifest — not just in chat — because that is what makes them survive a **resume**: execute pauses
+   on a stored `--gate` and hands each transformer its stored `--success`, and verify uses that
+   `--success` as the definition-of-done. A criterion agreed only verbally is invisible to a resumed
+   agent. If no such check exists yet, note it — safeguard must create it before this unit runs.
+
+   **Per-unit transform override.** Every unit inherits the global `strategy.transform` rule by default.
+   A unit that genuinely needs a *different* rule — a differently-shaped call site, a one-off edge the
+   global rule doesn't fit — can carry its own via `add-unit --transform "<rule>"`; when set, execute
+   hands *that* transformer the unit's own rule instead of the global one, and when omitted the unit
+   falls back to `strategy.transform`. Use it only where the unit truly diverges — an override that just
+   restates the global rule is noise a later reader has to reconcile.
 
 4. **Deep-dive the risky units.** For each high-risk unit, launch a `risk-analyzer` subagent to produce
    a mitigation plan (what could break, how to detect it, whether to split the unit further, whether it
@@ -43,7 +56,9 @@ the antidote is many small waves. Drive state through
 
 5. **Define the rollback + gate cadence.** Confirm the strategy: one checkpoint per wave (the default),
    rollback = restore snapshot (+ optional git reset). Decide with the user where human gates go — at
-   minimum before the first high-risk wave and before cleanup.
+   minimum before the first high-risk wave and before cleanup — and **record each gate on its wave with
+   `add-wave --gate` (step 3)** so execute actually stops there on resume, instead of rolling through a
+   pause that lived only in this conversation.
 
 6. **Get sign-off, then hand off.** Present the wave plan to the user (waves, unit counts, risk, order,
    gates) and adjust to their feedback — this is the cheapest moment to change course. Then

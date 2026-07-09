@@ -1,12 +1,14 @@
 ---
 name: migrate-assess
 description: >-
-  Phase 1 of the migration-harness: assess and inventory a large code migration. Use when starting or
-  scoping a codebase-wide migration/upgrade/port and you need a complete inventory of every site to
-  change, a dependency map, and a risk register before planning. Reach for it when the user asks
-  "how big is this migration", "find everything that uses X", "what's the blast radius of upgrading Y",
-  or right after `/migration-harness:migrate` sets status to `assessing`. You can't plan or verify what
-  you haven't enumerated — this phase enumerates it.
+  Phase 1 of the migration-harness: assess and inventory a large code migration, as the first step of
+  actually migrating something. Use when starting or scoping a codebase-wide migration/upgrade/port and
+  you need a complete inventory of every site to change, a dependency map, and a risk register before
+  planning. Reach for it when the user asks "how big is this migration", "as the first step of migrating
+  X, find every site that uses it", or "what's the blast radius of upgrading Y", or right after
+  `/migration-harness:migrate` sets status to `assessing`. A plain "find everything that uses X" with no
+  intent to migrate is just a code search — do that directly; only pull in the harness when the goal is
+  actually to *migrate* X. You can't plan or verify what you haven't enumerated — this phase enumerates it.
 ---
 
 # Assess — inventory, dependencies, and risk

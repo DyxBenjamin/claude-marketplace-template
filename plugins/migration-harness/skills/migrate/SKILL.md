@@ -67,10 +67,20 @@ init → assess → plan → safeguard → ┌── execute → verify ──�
 ## Golden rules (do not skip these — they are the point of the harness)
 
 1. **Checkpoint before you transform.** Every wave `execute` begins with
-   `migration.py checkpoint --wave <id> --label pre-<id>`. That snapshot is what a rollback restores.
-2. **Never advance past a red gate.** A wave is not done until `verify` is green. On failure, roll
-   back the wave (`migration.py rollback --wave <id>`) and re-plan the offending units — do not "push
-   through".
+   `migration.py checkpoint --wave <id> --label pre-<id>`. The checkpoint auto-derives the wave's
+   target files from its units and snapshots their **pre-edit** content — that snapshot is exactly what
+   a `rollback --wave <id>` restores (modified files reverted, files the wave created removed, files it
+   deleted restored).
+2. **Never advance past a red gate.** A wave is not done until `verify` is green. On failure the wave is
+   rolled back and left `rolled-back`, and a `rolled-back` wave is **not** "finished": you must either
+   **reset it and redo it** (`migration.py reset-wave --wave <id>` → re-plan → execute → verify) or
+   **abort the whole migration** (`migration.py set-status rolled-back`, the terminal abort). This is
+   **enforced by the harness, not just advised**: `set-wave-status verified` refuses while any unit is
+   unverified, and `set-status cleaning|done` now refuse until **every** wave is `verified` — a failed,
+   never-redone wave can no longer let the migration quietly "complete" (`--force` overrides but is
+   logged to the ledger as a deliberate exception). Don't grind forever, either: if the same unit fails
+   verify twice (its `attempts` hits the retry budget), stop and escalate to the user — narrow further
+   or take the terminal abort.
 3. **Keep waves small.** A wave you can verify and, if needed, revert in one sitting. Prefer more,
    smaller waves over one big risky one. Order units so no unit runs before its `depends_on`.
 4. **Go through `migration.py` for all state.** Never hand-edit `manifest.json`; it keeps the ledger
@@ -87,13 +97,20 @@ The harness scales by fanning work out to the plugin's specialized subagents via
 
 - **Assess / Cleanup** → `migration-scanner` (read-only) across code regions, one region per agent.
 - **Plan** → `risk-analyzer` for any unit you'd mark high-risk.
-- **Execute** → `migration-transformer`, one per unit; pass `isolation: worktree` when units in the
-  same wave touch overlapping areas so parallel edits don't collide.
+- **Execute** → `migration-transformer`, one per unit, editing the **main working tree** (the pre-wave
+  checkpoint is the safety net, so rollback is a true revert). Units whose `paths` are disjoint may run
+  in parallel. Do **not** put units that *share* files in separate worktrees — that only defers the
+  collision to an unowned 3-way merge; merge them into one unit (one transformer owns the shared file)
+  or serialize them. If you isolate disjoint units with `isolation: worktree` for parallelism, the
+  orchestrator MUST merge each worktree's diff back into the main tree before verify (see
+  migrate-execute). Verify always runs on the merged main tree.
 - **Verify** → several independent `migration-verifier` agents per migrated unit, each told to *prove*
   behavior changed; take a majority vote. Independence is what makes the green trustworthy.
 
-For very large migrations, tell the user they can opt into the Workflow engine ("use a workflow")
-for deterministic fan-out with token budgeting; the default is the Agent tool as above.
+For very large migrations — or when you genuinely need **hard isolation** between concurrent units
+rather than the merge-back-into-main-tree discipline above — tell the user they can opt into the
+Workflow engine ("use a workflow") for deterministic fan-out with token budgeting and enforced
+isolation boundaries; the default is the Agent tool as above.
 
 ## Talking to the user
 

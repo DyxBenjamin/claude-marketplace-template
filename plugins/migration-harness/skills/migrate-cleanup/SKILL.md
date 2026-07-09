@@ -23,15 +23,29 @@ unmigrated or unverified, finish them first (`/migration-harness:migrate-execute
 
 ## Steps
 
-1. **Checkpoint first.** `migration.py checkpoint --label pre-cleanup --commit`. Cleanup is mostly
-   deletion; it must be as reversible as every other phase.
+1. **Create the cleanup wave, then checkpoint.** Cleanup is a real wave and needs a real manifest wave
+   and unit(s) to hang its checkpoint/record/rollback off — without them, `checkpoint --wave`,
+   `record --wave --unit`, and `rollback --wave` all have no valid target (they reference a wave that
+   doesn't exist). So first create them: `migration.py add-wave --title cleanup [--risk low|med|high]`,
+   then, over the code you're about to delete, `migration.py add-unit --wave <id> --paths <targets>`
+   (one unit, or one per grouped deletion). Use the cleanup targets the document phase flagged; if you
+   need step 2's scan to pin the exact paths first, do that scan, then create the wave/unit over the
+   confirmed paths — but the wave, its unit(s), and the checkpoint must all exist **before** you delete
+   anything in step 3. Only then checkpoint: `migration.py checkpoint --wave <id> --label pre-<id>`.
+   The checkpoint auto-derives the files this cleanup touches from the wave's units and captures their
+   **pre-edit** content (no `--paths` needed), so `rollback --wave <id>` can restore anything a deletion
+   turns out to have broken. Cleanup is mostly deletion; it must be as reversible as every other wave.
 
 2. **Find what's genuinely dead.** Fan out `migration-scanner` subagents (read-only) to locate: old
    imports/exports with no remaining callers, compatibility shims introduced during the migration whose
    consumers are all migrated, feature flags now permanently in one state, and deprecated APIs with zero
-   references. Cross-check against the follow-ups the document phase recorded. **Prove** each item is
-   unused rather than assuming — search for dynamic/string/config references too, the same blind spots
-   assess flagged.
+   references. Cross-check against the follow-ups the document phase recorded. Search for
+   dynamic/string/config references too, the same blind spots assess flagged. **A scanner "unused"
+   result is a deletion *candidate*, not proof.** A scanner does *static* resolution — even with its
+   read-only Bash it cannot prove a negative, because dynamic, reflective, string-keyed, and config/DI
+   references evade static search. So scanner output **alone never authorizes a deletion**: a candidate
+   only becomes safe to remove once step 4's re-verify runs green with it gone. Let the scan *narrow* the
+   list; let the re-verify — not the scanner — be what *sanctions* each delete.
 
 3. **Remove in a reviewable batch.** Delete the confirmed-dead code and flip permanently-true flags to
    their final form, keeping the diff mechanical and grouped. When you can't *prove* something is unused,
@@ -39,14 +53,20 @@ unmigrated or unverified, finish them first (`/migration-harness:migrate-execute
    wrongly-deleted one is an outage.
 
 4. **Re-verify.** Deletion can break things (an import you removed was load-bearing, a flag guarded a
-   real branch). Run the suite + characterization again and, for anything non-trivial, a round of
-   `migration-verifier` agents. If it goes red, `migration.py rollback --to <pre-cleanup cp>` and narrow
-   the deletion. Record the result with `migration.py record`.
+   real branch). Run the mechanical gate the same way verify does — `migration.py check --wave <id>`
+   (the real suite, exit code = pass/fail) — plus, for anything non-trivial, a round of
+   `migration-verifier` agents. If it goes red, `migration.py rollback --wave <id>` — a true revert of
+   the cleanup to its pre-cleanup checkpoint — and narrow the deletion. Record the result against the
+   cleanup wave and unit you created in step 1: `migration.py record --wave <id> --unit <uid>
+   --result pass|fail`. Now that the wave and unit exist, `record` has a valid target — previously it
+   had none.
 
 5. **Close out.** Update the ledger and changelog (what was removed, what was intentionally kept and
-   why). When the tree is clean and green, `migration.py set-status done` and give the user a final
-   summary: what migrated, what was removed, what (if anything) was deliberately left behind, and any
-   remaining follow-ups.
+   why). When the tree is clean and green, mark the cleanup wave verified
+   (`migration.py set-wave-status --wave <id> verified`) — `set-status done` now refuses until **every**
+   wave, this cleanup wave included, is verified — then `migration.py set-status done` and give the user
+   a final summary: what migrated, what was removed, what (if anything) was deliberately left behind, and
+   any remaining follow-ups.
 
 ## Output
 
