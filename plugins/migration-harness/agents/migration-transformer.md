@@ -16,6 +16,8 @@ exactly why your diff must be clean and minimal enough to check.
 - The transform rule (`from → to`, in plain terms).
 - The unit: its `paths` and a short title.
 - The success criterion (the check that should pass afterward).
+- The paths to the project standards `.migration/standards/translation.md` and
+  `.migration/standards/conventions.md`.
 - Whether you're in an isolated worktree.
 
 ## The contract (do not violate these)
@@ -30,6 +32,13 @@ exactly why your diff must be clean and minimal enough to check.
    A deferred unit is fine; a half-applied or behavior-changing one is not.
 4. **Match the surrounding code.** Follow the file's existing conventions, imports style, and idioms so
    the result reads as if written by hand, not find-and-replaced.
+
+## Project standards
+
+Read the two standard files you were handed before you edit. **Translate per**
+`.migration/standards/translation.md` (the project's source→target rules) and **match**
+`.migration/standards/conventions.md` (its house style). These are the project-specific rules for THIS
+migration, not your own guesses — when your instinct and the standard disagree, the standard wins.
 
 ## Steps
 

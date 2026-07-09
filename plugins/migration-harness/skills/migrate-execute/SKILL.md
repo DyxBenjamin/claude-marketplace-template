@@ -48,6 +48,13 @@ harness.
    advance, and `.migration/` state is protected from accidental clobbering. Do **not** rely on the Bash
    guard to remind you here — transforms go through Edit/Write, which that guard does not gate.
 
+   **Ensure both project standards exist before transforming.** Run
+   `migration.py get-standard --name translation` and `migration.py get-standard --name conventions`; if
+   either is absent, run `/migration-harness:migrate-translation-standard` and
+   `/migration-harness:migrate-conventions` first. Then pass each transformer (step 3) the paths to
+   `.migration/standards/translation.md` (the source→target rules) and `.migration/standards/conventions.md`
+   (house style) — a transform that doesn't follow the project's own standard is how a migration drifts.
+
 3. **Fan out transformers — onto the main tree.** **Before dispatching each unit, mark it touched:**
    `migration.py set-unit-status --wave <id> --unit <uid> in-progress`. This is what makes a mid-execute
    crash recoverable: `in-progress` records "a transformer has started on this unit," so on resume you
@@ -57,7 +64,9 @@ harness.
    `rollback --wave <id>` is a true revert of everything the wave touched. Give each agent: the transform
    rule — the unit's **own `transform`** if plan set one with `add-unit --transform`, otherwise the
    global `strategy.transform` — the unit's `paths`, its **stored `success` criterion** (the one plan
-   persisted with `add-unit --success`), and the standing constraint below.
+   persisted with `add-unit --success`), the paths to the project standards
+   `.migration/standards/translation.md` and `.migration/standards/conventions.md`, and the standing
+   constraint below.
    Two rules keep parallel edits from silently colliding — verify (next phase) runs on the **main** tree,
    so any edit that never reaches it reads as a green no-op migration:
    - **Overlapping/shared files → never isolate.** If two units touch the same file, do **not** hand

@@ -23,33 +23,39 @@ migration that's planned on a partial inventory breaks in the sites you forgot. 
 
 ## Steps
 
-1. **Pin down the match rule.** State precisely what identifies a site that must change — the old
+1. **Ensure the project profile exists — before inventorying.** Run
+   `migration.py get-standard --name profile`; if it's absent, run `/migration-harness:migrate-profile`
+   first. The profile pins the source/target languages, the match rule's language specifics, the regions,
+   and the `suite_cmd` this whole migration relies on. Read `.migration/standards/profile.md` and let it
+   inform the match rule, the region split, and the verification command in the steps below.
+
+2. **Pin down the match rule.** State precisely what identifies a site that must change — the old
    import, API, pattern, config key, or type. Write it into the manifest with
    `migration.py set-strategy --transform "<from> → <to>: <rule>"`. This rule is reused by every later
    phase, so make it unambiguous.
 
-2. **Fan out scanners.** Split the repo into regions (top-level packages/dirs) and launch one
+3. **Fan out scanners.** Split the repo into regions (top-level packages/dirs) and launch one
    `migration-scanner` subagent per region *in a single message* so they run concurrently (cap at
    `strategy.parallelism`). Each scanner is read-only and returns, per region: files touched, exact
    match sites (path + line + snippet), imports/exports involved, and which other modules depend on
    the touched code. For a small repo, one scan inline is fine.
 
-3. **Build the dependency view.** Merge the scanner results into "what depends on what". This is the
+4. **Build the dependency view.** Merge the scanner results into "what depends on what". This is the
    input to wave ordering later: shared/core modules that many things import are migrated late (or
    characterized first); leaf modules with no dependents are safe early wins. Note cycles explicitly —
    they force a unit to be migrated atomically.
 
-4. **Register risks.** For each hotspot, record a risk with
+5. **Register risks.** For each hotspot, record a risk with
    `migration.py add-risk --area <a> --risk "<r>" --severity low|med|high --mitigation "<m>"`. Treat as
    higher-risk: shared/core utilities, public API surface, dynamic/reflective/string-keyed usage
    (grep can't fully find it), generated code, and any area with thin test coverage. High-risk areas
    drive both the plan order and how much baseline you capture.
 
-5. **Find the verification command.** Detect how this project proves itself (test runner, typecheck,
+6. **Find the verification command.** Detect how this project proves itself (test runner, typecheck,
    build, lint) and record it with `migration.py set-baseline --suite-cmd "<cmd>"`. Note where coverage
    is missing in the areas you'll touch — the safeguard phase fills those gaps.
 
-6. **Summarize and hand off.** Report to the user: total sites across N files, the dependency hotspots,
+7. **Summarize and hand off.** Report to the user: total sites across N files, the dependency hotspots,
    the risk register, and the biggest unknowns. Then `migration.py set-status planning` and continue
    with `/migration-harness:migrate-plan`.
 

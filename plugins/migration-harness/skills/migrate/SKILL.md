@@ -64,6 +64,24 @@ init → assess → plan → safeguard → ┌── execute → verify ──�
                                                      (all waves done) → cleaning → done
 ```
 
+## Project specialization (standards)
+
+The harness starts generic and **specializes to each repo** through four self-mutating *standard*
+skills. Each generates a project-specific standard **once** into `.migration/standards/<name>.md` (via
+Context7 research on the actual source/target stack) and is inert thereafter — the standard is a durable
+artifact, not a step you rerun. Every phase **ensures its standard on demand**: it checks with
+`migration.py get-standard --name <name>` and, only if the standard is absent, runs the matching
+generator skill before proceeding, then reads the file.
+
+| Phase | Standard | Generator skill |
+| --- | --- | --- |
+| Assess | `profile` | `/migration-harness:migrate-profile` |
+| Safeguard | `parity` | `/migration-harness:migrate-parity-standard` |
+| Execute | `translation` + `conventions` | `/migration-harness:migrate-translation-standard`, `/migration-harness:migrate-conventions` |
+
+Standards live in `.migration/standards/` and are generated via Context7 research, once; regenerate one
+only when the source/target stack itself changes.
+
 ## Golden rules (do not skip these — they are the point of the harness)
 
 1. **Checkpoint before you transform.** Every wave `execute` begins with

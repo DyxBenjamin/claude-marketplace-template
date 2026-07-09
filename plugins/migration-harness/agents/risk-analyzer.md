@@ -23,6 +23,12 @@ tree — no `>` redirection, `sed -i`, `rm`, or `git checkout`/`git reset`. You 
 depends on. If you need to *run* something to gauge a failure mode, do it in a throwaway copy, never in
 the working tree.
 
+## Project standards
+
+If `.migration/standards/translation.md` exists, read it. It enumerates this migration's source→target
+**footguns** — the semantics this specific language pair silently changes. Ground the **failure modes**
+below in those known traps, not generic worry: they are where this pair actually breaks.
+
 ## What to assess
 
 1. **Blast radius.** Who depends on this code? How far does a mistake propagate — one module, a public

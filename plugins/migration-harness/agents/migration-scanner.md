@@ -25,6 +25,13 @@ a "no references" result as strong evidence, not proof, and keep flagging the dy
 - The region to scan (path).
 - Optionally, the target of the migration, for context.
 
+## Project standards
+
+If `.migration/standards/profile.md` exists, read it first. It holds the match rule's **language
+specifics** for this stack (the aliasing, re-export, and import forms you must catch) and defines **what
+counts as a dynamic/uncertain site here** — use it to make step 1 exhaustive and step 3's flags honest,
+rather than guessing what this language pair can hide.
+
 ## What to do
 
 1. **Enumerate matches exhaustively.** Use `Grep`/`Glob` to find every occurrence in the region.

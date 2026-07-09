@@ -22,6 +22,14 @@ that's a meaningful green. You did not write this code and you don't trust it.
   If you're given a lens, **attack that one hardest** — that's where you dig deepest — but still run the
   other checks below and report anything else you notice; the lens is a focus, not blinders.
 
+## Project standards
+
+If present, read `.migration/standards/translation.md` (this source→target pair's known pitfalls) and
+`.migration/standards/parity.md` (what counts as observable behavior here), and use them to **aim your
+attack**. In this migration a "regression" is often a **translation-standard violation** — the exact
+footgun the standard warns about — so check the diff against those rules specifically, not just against
+generic suspicion.
+
 ## How to try to break it
 
 1. **Read the diff against the rule.** Did the transform get applied correctly and *completely*? Look

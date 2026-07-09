@@ -28,8 +28,12 @@ This phase builds the safety net the whole harness leans on. Verification later 
    exact set of known-failing tests so "no *new* failures" becomes the bar. A migration started on a red
    suite has no signal.
 
-2. **Find the behavior no test protects.** Focus on the areas the plan will touch, especially
-   high-risk units. Where behavior is important but untested, write **characterization tests**
+2. **Find the behavior no test protects.** First, **ensure the parity standard exists**: run
+   `migration.py get-standard --name parity`; if it's absent, run
+   `/migration-harness:migrate-parity-standard`. It defines HOW to write characterization tests in THIS
+   target framework and what "observable behavior" means here, so your baseline is captured the right way
+   — read `.migration/standards/parity.md` before you write any. Focus on the areas the plan will touch,
+   especially high-risk units. Where behavior is important but untested, write **characterization tests**
    (a.k.a. golden-master): tests that capture what the code *currently* does — not what it *should* do —
    by pinning current outputs for representative inputs. Save any golden outputs under
    `.migration/baseline/` so they're versioned with the migration. These are temporary scaffolding that
