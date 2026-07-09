@@ -24,7 +24,9 @@ evaluated at runtime).
 ├── ledger.md                  # append-only human-readable decision/change log
 ├── snapshots/<cp-id>/         # per-checkpoint: meta.json + files/<mirrored tree>
 ├── reports/<wave>/<unit>.md   # verification reports (+ _suite.md from `check --wave`)
-└── baseline/                  # captured baseline behavior (characterization outputs)
+├── baseline/                  # captured baseline behavior (characterization outputs)
+└── standards/<name>.md        # project standards generated once by the phase skills
+                               #   (profile, translation, conventions, parity)
 ```
 
 ## `manifest.json` (schema v1)
@@ -57,6 +59,14 @@ missing or interpreted differently).
                                     // characterization path exists on disk (or --force)
     "suite_cmd": "string",          // command that runs the project's tests/checks
     "characterization": []          // paths to characterization artifacts
+  },
+  "standards": {                    // project standards generated once by the phase
+                                    // skills; {} until a skill calls set-standard.
+                                    // (Older manifests without this key load fine —
+                                    // load() defaults it to {}.)
+    "translation": { "path": ".migration/standards/translation.md",
+                     "source": "PHP", "target": "JavaScript",
+                     "generated": "ISO-8601Z" }
   },
   "checkpoints": [
     { "id": "cp-<ts>-<label>-<rand>", "label": "string", "created": "ISO-8601Z",
@@ -100,6 +110,31 @@ deliberately preserves it, so the retry bound isn't reset away). Wave **`risk`**
 persist the plan's per-wave risk and human-gate decisions so they survive a resume instead of living
 only in prose.
 
+### Project standards
+
+The `standards` map holds project-specific standards that are **generated once** by the self-mutating
+phase skills — `migrate-profile`, `migrate-translation-standard`, `migrate-conventions`, and
+`migrate-parity-standard` — one entry per name: `profile`, `translation`, `conventions`, `parity`. Each
+standard's document lives at `.migration/standards/<name>.md`; the manifest entry records where it is
+plus the `source`/`target` stacks it was written for and when it was `generated`.
+
+- `init` seeds `standards: {}` and creates the `.migration/standards/` directory.
+- `set-standard --name <name> --path <path> [--source S] [--target T]` registers one (mutating, goes
+  through the lock + atomic save, and appends a ledger line). `--name` outside the four known names is
+  allowed but **warns**, so the skill family can grow without a code change.
+- `get-standard --name <name>` is the **artifact-guard primitive** the skills use to decide whether to
+  bootstrap: it takes **no lock**, prints the registered `path` and exits `0` when present, or prints
+  nothing and exits `1` when absent. A phase skill "ensures on demand" with, e.g.:
+
+  ```bash
+  if ! python3 "${CLAUDE_PLUGIN_ROOT}/scripts/migration.py" get-standard --name translation; then
+    …generate the standard, then set-standard --name translation --path … …
+  fi
+  ```
+
+There is **no hard gate** on standards in the script — `set-status`/`record` do not refuse on a missing
+standard. The phase skills alone decide when a standard is required and generate it on demand.
+
 ### Lifecycle status (top-level `status`)
 
 `assessing` → `planning` → `safeguarding` → `executing` ⇄ `verifying` → `documenting` → `cleaning`
@@ -114,7 +149,9 @@ a batch of units with no unmet cross-dependencies, so its units can run in paral
 | Command | Purpose |
 | --- | --- |
 | `init --name N [--goal G] [--transform T] [--parallelism K] [--force]` | Create `.migration/` + manifest. `--force` first backs up the existing manifest to `manifest.bak-<UTC>.json` and warns about now-orphaned `snapshots/` dirs. |
-| `show` / `status` | Print full manifest / short summary. `status` also prints `strategy.parallelism` and any per-unit `transform` override. |
+| `show` / `status` | Print full manifest / short summary. `status` also prints `strategy.parallelism`, any per-unit `transform` override, and a `Standards:` line listing which standards are generated (`none` if empty). |
+| `set-standard --name N --path P [--source S] [--target T]` | Register a generated project standard in `standards[N]` (mutating; appends a ledger line). Unknown `N` warns but still registers, so the skill family can grow. |
+| `get-standard --name N` | Read-only artifact-guard primitive (no lock): print `standards[N].path` + exit 0 if registered, else print nothing + exit 1. |
 | `set-status <value> [--force]` | Advance the lifecycle status (gated — see below). On `done`/`rolled-back` it also clears a stale `.migration/.allow-destructive` guard override if one is present. |
 | `set-strategy [--transform] [--rollback] [--parallelism]` | Update strategy fields. |
 | `add-risk --area --risk --severity --mitigation [--id]` | Append to the risk register. |
