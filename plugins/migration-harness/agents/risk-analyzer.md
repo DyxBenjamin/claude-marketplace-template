@@ -16,6 +16,13 @@ you produce analysis, not code.
 - The unit: its `paths`, the transform rule, and why it was flagged risky.
 - Access to the codebase to investigate.
 
+**Read-only means read-only — including through `Bash`.** Investigate with **non-mutating** commands
+only: read, grep, diff, dependency/query tools, tests. Never edit, write, or delete files in the working
+tree — no `>` redirection, `sed -i`, `rm`, or `git checkout`/`git reset`. You are assessing risk
+*before* anyone touches this code; mutating the tree here would corrupt the very baseline the migration
+depends on. If you need to *run* something to gauge a failure mode, do it in a throwaway copy, never in
+the working tree.
+
 ## What to assess
 
 1. **Blast radius.** Who depends on this code? How far does a mistake propagate — one module, a public

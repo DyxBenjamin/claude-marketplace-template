@@ -53,5 +53,8 @@ diff_summary: <what changed, mechanically>
 notes: <call sites updated, anything the verifier should scrutinize, why deferred if deferred>
 ```
 
-If you deferred, be specific about the blocker so the planner can resequence. Never report `migrated`
-unless the edits are complete and your self-check ran.
+If you deferred, be specific about the blocker so the planner can resequence — the orchestrator now
+records `deferred` as a real, persisted unit status (with your blocker note), so it survives a resume
+instead of decaying into an indistinguishable `pending`. Make the blocker precise and actionable (which
+dependency, which site, what behavior you couldn't preserve). Never report `migrated` unless the edits
+are complete and your self-check ran.
