@@ -35,7 +35,10 @@ auto-falls back to it.
 
 ## First, orient yourself
 
-Run `migration.py status`. There are two situations:
+Run `migration.py status` for the overview, then `migration.py next` for the **single next action** —
+a deterministic directive computed from durable state (which wave is active, which units are
+in-progress, what's blocking), so a resumed session recovers from `.migration/`, not from chat memory.
+There are two situations:
 
 - **No `.migration/` yet (fresh start).** Confirm the migration goal with the user in one or two
   sentences (what's moving from what, to what, and what "done" looks like). Confirm this is a git
@@ -44,9 +47,11 @@ Run `migration.py status`. There are two situations:
   --transform "<the rule in plain words>"` — this forks a dedicated integration branch
   (`migration/<slug>`) from the current branch **without switching the working tree** — and proceed to
   **assess**. (A non-git repo falls back to the legacy `main-tree` model automatically.)
-- **A manifest exists (resume).** Trust the state, not your memory. Read `status` and jump straight
-  to the phase it names — do not redo completed phases. Skim `.migration/ledger.md` to recover
-  context on what happened and why.
+- **A manifest exists (resume).** Trust the state, not your memory. Do exactly what `migration.py next`
+  says — it names the phase, the wave, and any mid-wave recovery (e.g. an `in-progress` unit to diff
+  before re-dispatching, or a `rollback-failed` wave to stop on) — and skim `.migration/ledger.md` to
+  recover *why*. Do not redo completed phases. For a live picture (yours or the user's), see
+  `/migration-harness:migrate-monitor` (a terminal dashboard + `migration.py progress`).
 
 ## The lifecycle and where to hand off
 

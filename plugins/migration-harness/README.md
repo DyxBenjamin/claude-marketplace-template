@@ -84,6 +84,22 @@ The harness fans work out to specialized subagents (in `agents/`):
 For very large runs you can also opt into the Workflow engine ("use a workflow" / ultracode) for
 deterministic fan-out; by default the skills drive the subagents via the Agent tool.
 
+## Visibility & resume
+
+A migration is long and stateful — and because all of its state is durable, an interrupted run is
+recoverable. Two tools surface that state (both derived by `scripts/migration.py`, so the human view
+and the agent's decisions never diverge):
+
+- **Live dashboard** — `python3 scripts/migration_tui.py` renders the plan, the phase, every wave/unit
+  with live status, the recent ledger, and **the next action**, re-drawing whenever the manifest
+  changes. Run it in a second terminal to watch a long run; `--once` / `--json` give a one-shot
+  snapshot when there's no TTY. Stdlib + `curses`, no dependencies.
+- **Deterministic resume** — `migration.py next` prints the single next action computed from state
+  (which wave is active, which unit is mid-transform, what's blocking), and `migration.py progress`
+  the at-a-glance metrics. This is the answer to *"a 3-hour session broke halfway — now what?"*: a
+  fresh session reads where to pick up from `.migration/`, not from lost chat context. The
+  `/migration-harness:migrate-monitor` skill wires both up.
+
 ## Requirements
 
 - A git repository (the rollback backbone). The harness will offer to `git init` if needed.

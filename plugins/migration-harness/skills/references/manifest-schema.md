@@ -212,6 +212,8 @@ a batch of units with no unmet cross-dependencies, so its units can run in paral
 | `check --wave W` | Run `baseline.suite_cmd`; write `.migration/reports/W/_suite.md`; exit code reflects the suite. In worktree mode it runs **inside the wave's worktree** (so it tests the migrated code), else the repo root. |
 | `record --wave W --unit U --result pass|fail [--report path] [--note text] [--no-rollback]` | Record verification (`pass` = unit `verified`; `fail` increments `attempts` + auto-rolls-back the wave — in worktree mode by discarding the worktree/branch). |
 | `ledger "message"` | Append a line to the ledger. |
+| `progress [--json]` | Read-only derived metrics: phase, waves verified/integrated/active/pending, units by status, attempts spent, baseline/standards/checkpoints/risks. |
+| `next [--json]` | Read-only **deterministic next action** computed from state (`action`, `wave`, `severity`, `hint`, `commands[]`) — the resume directive a fresh/resumed session follows instead of reconstructing from memory. |
 
 ### Checkpoint & rollback semantics
 

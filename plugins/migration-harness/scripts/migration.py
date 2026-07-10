@@ -32,6 +32,8 @@ Commands:
     check           Run baseline.suite_cmd for a wave; write a suite report.
     record          Record a verification result for a unit (pass/fail + report).
     ledger          Append a line to the human-readable ledger.
+    progress        Read-only: at-a-glance derived metrics (phase, waves, units).
+    next            Read-only: the deterministic next action (resume directive).
 
 Everything is stdlib-only (json, argparse, subprocess, shutil, pathlib, fcntl,
 tempfile, uuid). Requires **Python 3.7+** — the real floor is set by
@@ -1669,6 +1671,306 @@ def cmd_ledger(root: Path, args) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Derived views — progress + the deterministic `next` driver
+#
+# These read-only functions turn the manifest into (a) at-a-glance metrics and
+# (b) THE single next action, so a fresh session (human or agent) that inherits a
+# half-finished migration can recover from durable state alone — no chat memory.
+# The TUI (scripts/migration_tui.py) renders exactly these; `next`/`progress`
+# expose them to the orchestrator skill.
+# --------------------------------------------------------------------------- #
+PHASE_ORDER = [
+    "assessing", "planning", "safeguarding", "executing",
+    "verifying", "documenting", "cleaning", "done",
+]
+
+
+def read_manifest(root: Path):
+    """Non-fatal load: return the manifest dict, or None if there is no migration
+    / it can't be read. Unlike load(), never exits — for the TUI and other
+    read-only consumers that must degrade gracefully."""
+    p = manifest_path(root)
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if not isinstance(data.get("standards"), dict):
+        data["standards"] = {}
+    data.setdefault("strategy", {})
+    return data
+
+
+def recent_ledger(root: Path, n: int = 12) -> list[str]:
+    """The last n ledger entries (newest last), stripped of markdown noise."""
+    ledger = mig_dir(root) / "ledger.md"
+    if not ledger.exists():
+        return []
+    lines = [ln.rstrip("\n") for ln in ledger.read_text().splitlines()]
+    entries = [ln for ln in lines if ln.startswith("- ")]
+    return entries[-n:]
+
+
+def compute_progress(m: dict) -> dict:
+    """At-a-glance metrics derived from the manifest."""
+    waves = m.get("waves", [])
+    wave_counts = {"total": len(waves)}
+    for key in ("pending", "active", "verified", "rolled-back", "rollback-failed"):
+        wave_counts[key] = sum(1 for w in waves if w.get("status") == key)
+    wave_counts["integrated"] = sum(1 for w in waves if w.get("integrated"))
+    unit_by_status: dict[str, int] = {}
+    total_units = 0
+    attempts_total = 0
+    for w in waves:
+        for u in w.get("units", []):
+            total_units += 1
+            unit_by_status[u["status"]] = unit_by_status.get(u["status"], 0) + 1
+            attempts_total += int(u.get("attempts", 0) or 0)
+    status = m.get("status", "")
+    try:
+        phase_index = PHASE_ORDER.index(status)
+    except ValueError:
+        phase_index = -1  # rolled-back or unknown — off the linear rail
+    strat = m.get("strategy", {})
+    risks = m.get("risk_register", [])
+    return {
+        "name": m.get("name", ""),
+        "goal": m.get("goal", ""),
+        "status": status,
+        "phase_index": phase_index,
+        "phases": PHASE_ORDER,
+        "execution": strat.get("execution", "main-tree"),
+        "branch": strat.get("branch", ""),
+        "parallelism": strat.get("parallelism"),
+        "baseline_captured": bool(m.get("baseline", {}).get("captured")),
+        "standards": sorted(m.get("standards", {})),
+        "checkpoints": len(m.get("checkpoints", [])),
+        "risks": {
+            "total": len(risks),
+            "high": sum(1 for r in risks if r.get("severity") == "high"),
+        },
+        "waves": wave_counts,
+        "units": {"total": total_units, "by_status": unit_by_status},
+        "attempts_total": attempts_total,
+        "updated": m.get("updated", ""),
+    }
+
+
+def _status_by_uid(m: dict) -> dict:
+    return {u["id"]: u["status"] for w in m.get("waves", []) for u in w.get("units", [])}
+
+
+def _next_pending_wave(m: dict):
+    """First `pending` wave (in order) whose units' cross-wave `depends_on` are
+    all already `verified` — the same rule execute uses to pick a wave."""
+    by_uid = _status_by_uid(m)
+    for w in m.get("waves", []):
+        if w.get("status") != "pending":
+            continue
+        ready = all(
+            by_uid.get(dep) == "verified"
+            for u in w.get("units", [])
+            for dep in u.get("depends_on", [])
+        )
+        if ready:
+            return w
+    return None
+
+
+def _first(seq, pred):
+    for x in seq:
+        if pred(x):
+            return x
+    return None
+
+
+def compute_next(m: dict) -> dict:
+    """THE single next action, computed deterministically from manifest state.
+    Encodes the orchestration decision tree the skills follow, so resume is a
+    state read rather than a reconstruction. Returns:
+      {action, reason, wave, skill, hint, severity, commands[]}
+    severity: info | warn | critical. commands: literal next steps to run."""
+    def out(action, reason, commands=None, wave=None, skill=None, hint=None, severity="info"):
+        return {
+            "action": action, "reason": reason, "wave": wave, "skill": skill,
+            "hint": hint, "severity": severity, "commands": commands or [],
+        }
+
+    waves = m.get("waves", [])
+    status = m.get("status", "")
+
+    # Terminal-bad state wins over everything: a wave whose rollback git-failed.
+    rf = _first(waves, lambda w: w.get("status") == "rollback-failed")
+    if rf:
+        return out(
+            "repair", f"wave {rf['id']} is rollback-failed — git may be half-reverted",
+            wave=rf["id"], severity="critical",
+            hint="repair git by hand (remove the stale worktree/branch), then set-wave-status rolled-back",
+            commands=["git worktree list", f"migration.py set-wave-status --wave {rf['id']} rolled-back"],
+        )
+    if status == "rolled-back":
+        return out("aborted", "the migration was aborted (set-status rolled-back)", severity="warn")
+    if status == "done":
+        return out(
+            "done", "migration complete — review and merge the integration branch",
+            commands=[f"git log --oneline {m.get('strategy', {}).get('branch', '')}".strip()],
+        )
+    if status == "assessing":
+        return out("assess", "inventory the migration sites and map dependencies",
+                   skill="migrate-assess", commands=["/migration-harness:migrate-assess"])
+    if status == "planning":
+        return out("plan", "order the work into small waves with success criteria + gates",
+                   skill="migrate-plan", commands=["/migration-harness:migrate-plan"])
+    if status == "safeguarding":
+        return out("safeguard", "capture the behavioral baseline before transforming",
+                   skill="migrate-safeguard", commands=["/migration-harness:migrate-safeguard"])
+    if status == "executing":
+        active = _first(waves, lambda w: w.get("status") == "active")
+        if active:
+            wid = active["id"]
+            units = active.get("units", [])
+            if not active.get("worktree"):
+                return out("open-worktree", f"wave {wid} is active but has no worktree yet",
+                           wave=wid, skill="migrate-execute",
+                           commands=[f"migration.py worktree-open --wave {wid}"])
+            inprog = [u["id"] for u in units if u["status"] == "in-progress"]
+            if inprog:
+                return out(
+                    "resume-wave",
+                    f"wave {wid} has in-progress unit(s) {', '.join(inprog)} — a transformer "
+                    "started but never recorded migrated",
+                    wave=wid, skill="migrate-execute", severity="warn",
+                    hint=f"re-attach the worktree ({active.get('worktree')}); DIFF each in-progress "
+                         "unit before re-dispatching — a non-idempotent transform would double-apply",
+                    commands=[f"migration.py worktree-path --wave {wid}"],
+                )
+            pending_u = [u["id"] for u in units if u["status"] == "pending"]
+            if pending_u:
+                return out("transform", f"wave {wid} worktree open — transform unit(s): {', '.join(pending_u)}",
+                           wave=wid, skill="migrate-execute",
+                           commands=[f"migration.py worktree-path --wave {wid}"])
+            return out("verify", f"wave {wid} fully transformed — hand off to verify",
+                       wave=wid, skill="migrate-verify",
+                       commands=["migration.py set-status verifying", "/migration-harness:migrate-verify"])
+        nxt = _next_pending_wave(m)
+        if nxt:
+            return out("execute-wave", f"start the next wave: {nxt['id']}", wave=nxt["id"],
+                       skill="migrate-execute",
+                       commands=[f"migration.py set-wave-status --wave {nxt['id']} active",
+                                 "/migration-harness:migrate-execute"])
+        rb = _first(waves, lambda w: w.get("status") == "rolled-back")
+        if rb:
+            return out("reset-wave", f"wave {rb['id']} was rolled back — reset it to redo, or abort the migration",
+                       wave=rb["id"], severity="warn",
+                       commands=[f"migration.py reset-wave --wave {rb['id']}", "migration.py set-status rolled-back"])
+        unmerged = _first(waves, lambda w: w.get("status") == "verified" and not w.get("integrated"))
+        if unmerged:
+            return out("integrate", f"wave {unmerged['id']} verified but not integrated", wave=unmerged["id"],
+                       commands=[f"migration.py integrate --wave {unmerged['id']}"])
+        if waves and all(w.get("integrated") for w in waves):
+            return out("advance", "all waves integrated — move to cleanup",
+                       commands=["migration.py set-status cleaning", "/migration-harness:migrate-cleanup"])
+        return out("plan-more", "no wave is active or pending — plan the next waves, or finish",
+                   skill="migrate-plan")
+    if status == "verifying":
+        active = (
+            _first(waves, lambda w: w.get("status") == "active")
+            or _first(waves, lambda w: any(u["status"] == "migrated" for u in w.get("units", [])))
+        )
+        if active:
+            wid = active["id"]
+            failed = [u["id"] for u in active.get("units", []) if u["status"] == "failed"]
+            if failed:
+                return out("recover", f"unit(s) {', '.join(failed)} failed verify in {wid} — the wave was rolled "
+                           "back; reset it to redo (or abort)", wave=wid, severity="warn", skill="migrate-verify",
+                           commands=[f"migration.py reset-wave --wave {wid}"])
+            unver = [u["id"] for u in active.get("units", []) if u["status"] != "verified"]
+            if unver:
+                return out("verify", f"verify wave {wid}: run the suite in its worktree, dispatch adversarial "
+                           f"verifiers, record each unit ({', '.join(unver)} left)", wave=wid, skill="migrate-verify",
+                           commands=[f"migration.py check --wave {wid}", f"migration.py worktree-path --wave {wid}"])
+            if active.get("status") != "verified":
+                return out("verify-wave", f"all units of {wid} verified — mark the wave verified, then integrate",
+                           wave=wid, commands=[f"migration.py set-wave-status --wave {wid} verified",
+                                               f"migration.py integrate --wave {wid}"])
+            if not active.get("integrated"):
+                return out("integrate", f"wave {wid} verified — integrate it into the branch", wave=wid,
+                           commands=[f"migration.py integrate --wave {wid}"])
+        # A wave verified but not yet integrated (e.g. set-wave-status verified ran
+        # but integrate didn't) — integrate before documenting.
+        unmerged = _first(waves, lambda w: w.get("status") == "verified" and not w.get("integrated"))
+        if unmerged:
+            return out("integrate", f"wave {unmerged['id']} verified — integrate it into the branch",
+                       wave=unmerged["id"], commands=[f"migration.py integrate --wave {unmerged['id']}"])
+        return out("document", "verification complete — document the wave",
+                   skill="migrate-document",
+                   commands=["migration.py set-status documenting", "/migration-harness:migrate-document"])
+    if status == "documenting":
+        nxt = _next_pending_wave(m)
+        if nxt:
+            return out("next-wave", f"documented — take the next wave: {nxt['id']}", wave=nxt["id"],
+                       commands=["migration.py set-status executing",
+                                 f"migration.py set-wave-status --wave {nxt['id']} active"])
+        return out("cleanup", "all waves done — move to the final cleanup phase",
+                   commands=["migration.py set-status cleaning", "/migration-harness:migrate-cleanup"])
+    if status == "cleaning":
+        return out("cleanup", "remove dead code / shims in a final cleanup wave, then finish",
+                   skill="migrate-cleanup", commands=["/migration-harness:migrate-cleanup"])
+    return out("unknown", f"unrecognized status {status!r}", severity="warn")
+
+
+def cmd_progress(root: Path, args) -> None:
+    m = load(root)
+    prog = compute_progress(m)
+    if args.json:
+        print(json.dumps(prog, indent=2))
+        return
+    w = prog["waves"]
+    print(f"{prog['name']}  [{prog['status']}]   {prog['execution']} → {prog['branch'] or '(no branch)'}")
+    if prog["goal"]:
+        print(f"  goal: {prog['goal']}")
+    idx = prog["phase_index"]
+    strip = "  ".join(
+        (f"[{p}]" if i == idx else p) for i, p in enumerate(prog["phases"])
+    )
+    print(f"  phase: {strip}")
+    print(
+        f"  waves: {w['verified']}/{w['total']} verified, {w['integrated']} integrated, "
+        f"{w['active']} active, {w['pending']} pending, {w['rolled-back']} rolled-back"
+        + (f", {w['rollback-failed']} ROLLBACK-FAILED" if w["rollback-failed"] else "")
+    )
+    u = prog["units"]
+    by = ", ".join(f"{k}:{v}" for k, v in sorted(u["by_status"].items())) or "none"
+    print(f"  units: {u['total']} ({by})   attempts spent: {prog['attempts_total']}")
+    print(
+        f"  baseline: {'captured' if prog['baseline_captured'] else 'NOT captured'}   "
+        f"standards: {', '.join(prog['standards']) or 'none'}   "
+        f"checkpoints: {prog['checkpoints']}   risks: {prog['risks']['total']} ({prog['risks']['high']} high)"
+    )
+
+
+def cmd_next(root: Path, args) -> None:
+    m = load(root)
+    nxt = compute_next(m)
+    if args.json:
+        print(json.dumps(nxt, indent=2))
+        return
+    tag = {"info": "Next", "warn": "Next (attention)", "critical": "STOP"}[nxt["severity"]]
+    print(f"{tag}: {nxt['action']} — {nxt['reason']}")
+    if nxt.get("wave"):
+        print(f"  wave: {nxt['wave']}")
+    if nxt.get("hint"):
+        print(f"  hint: {nxt['hint']}")
+    if nxt.get("commands"):
+        print("  run:")
+        for c in nxt["commands"]:
+            print(f"    {c}")
+
+
+# --------------------------------------------------------------------------- #
 # CLI wiring
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
@@ -1889,6 +2191,17 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ledger", help="Append a line to the ledger")
     s.add_argument("message")
     s.set_defaults(func=cmd_ledger, mutates=True)
+
+    s = sub.add_parser("progress", help="At-a-glance migration metrics (read-only)")
+    s.add_argument("--json", action="store_true", help="emit the derived metrics as JSON")
+    s.set_defaults(func=cmd_progress)
+
+    s = sub.add_parser(
+        "next",
+        help="The deterministic next action from current state (resume aid; read-only)",
+    )
+    s.add_argument("--json", action="store_true", help="emit the next-action directive as JSON")
+    s.set_defaults(func=cmd_next)
 
     return p
 
