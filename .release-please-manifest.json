@@ -1,4 +1,4 @@
 {
   "plugins/base-plugin": "0.1.0",
-  "plugins/migration-harness": "0.1.0"
+  "plugins/migration-harness": "0.2.0"
 }
