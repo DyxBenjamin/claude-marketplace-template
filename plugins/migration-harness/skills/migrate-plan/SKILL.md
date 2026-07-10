@@ -54,8 +54,9 @@ the antidote is many small waves. Drive state through
    needs extra characterization). Fold its output back into the risk register and, if warranted, split
    the unit.
 
-5. **Define the rollback + gate cadence.** Confirm the strategy: one checkpoint per wave (the default),
-   rollback = restore snapshot (+ optional git reset). Decide with the user where human gates go — at
+5. **Define the rollback + gate cadence.** Confirm the strategy: one isolated worktree per wave (the
+   default worktree model), rollback = discard that worktree + its branch (the legacy `main-tree` model
+   uses snapshot restore instead). Decide with the user where human gates go — at
    minimum before the first high-risk wave and before cleanup — and **record each gate on its wave with
    `add-wave --gate` (step 3)** so execute actually stops there on resume, instead of rolling through a
    pause that lived only in this conversation.
@@ -72,7 +73,7 @@ Plan: <W> waves, <U> units total
   wave-2 [med]   <n> units — <theme>
   ...
   wave-k [high]  <n> units — <theme>  ← human gate before this
-Rollback: checkpoint per wave (git + snapshots)
+Rollback: isolated worktree per wave (discard on failure)
 Units still missing a success check: <list>  → safeguard must cover these
 ```
 

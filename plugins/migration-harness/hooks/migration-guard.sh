@@ -95,6 +95,20 @@ print(ti.get("file_path") or ti.get("notebook_path") or "")' <<<"$INPUT" 2>/dev/
     # Could not determine a target path → fail OPEN (don't wedge legitimate edits).
     [ -n "$FILE" ] || exit 0
 
+    # Writable carve-outs (WT1): the harness's own workflow writes under these
+    # subtrees, so they must NOT be blocked — otherwise the documented flow is
+    # unexecutable and the agent is pushed to arm the override:
+    #   worktrees/  wave worktree checkouts (transformers Edit files INSIDE them)
+    #   standards/  generated project standards (migrate-profile/-conventions/…)
+    #   baseline/   captured golden outputs (migrate-safeguard)
+    #   reports/    per-wave verification reports
+    #   agent-io/   structured subagent I/O
+    # Only manifest.json, manifest.lock, snapshots/, .gitignore, .allow-destructive
+    # and the .migration root itself stay protected (below).
+    if printf '%s' "$FILE" | grep -qE '(^|/)\.migration/(worktrees|standards|baseline|reports|agent-io)/'; then
+      exit 0
+    fi
+
     # Match ".migration" only as a real path component (so "foo.migration" and
     # ".migrations/" are NOT falsely blocked).
     if printf '%s' "$FILE" | grep -qE '(^|/)\.migration(/|$)'; then
@@ -141,7 +155,20 @@ fi
 # component (…/.migration or a trailing/standalone .migration).
 MIG='(^|[[:space:]/])(rm|mv|cp|dd|truncate|shred|tee|install|ln|rsync)[[:space:]][^|;&]*\.migration(/|[[:space:]]|$)'
 MIG+='|>>?[[:space:]]*[^|;&<>]*\.migration(/|[[:space:]]|$)'
+# Protected targets: the manifest, lock, snapshots, gitignore, override, or the
+# .migration root itself (bare, trailing, or as a whole-dir operand). Clobbering
+# any of these disarms the guard / destroys rollback state.
+MIG_PROT='\.migration/(manifest\.[^[:space:]/]*|snapshots|\.gitignore|\.allow-destructive)'
+MIG_PROT+='|\.migration([[:space:]]|/[[:space:]]|/?$)'
+# Writable carve-outs (WT1): same subtrees exempted for Write/Edit above.
+MIG_CARVE='\.migration/(worktrees|standards|baseline|reports|agent-io)/'
 if grep -qE "$MIG" <<<"$CMD"; then
+  # A command that touches ONLY a writable carve-out (and no protected target) is
+  # legitimate harness work — allow it. Anything touching a protected target, or
+  # an unrecognised .migration path, is blocked (default-deny).
+  if ! grep -qE "$MIG_PROT" <<<"$CMD" && grep -qE "$MIG_CARVE" <<<"$CMD"; then
+    :  # carve-out only → fall through, do not block
+  else
   cat >&2 <<EOF
 migration-harness: BLOCKED — this command targets .migration/, the harness's
 protected state (manifest, lock, snapshots).
@@ -156,6 +183,7 @@ To run this exact command anyway, authorise the NEXT command once:
   touch "$OVERRIDE"    # consumed by the very next Bash command, then re-armed
 EOF
   exit 2
+  fi
 fi
 
 # --- False-positive relief (E5): allow recursive rm of obvious build/temp dirs -
@@ -164,7 +192,14 @@ fi
 # and MIG above already ran, so nothing under .migration/ can slip through here.
 SAFE_RM='^[[:space:]]*(/[^[:space:]]*/)?rm[[:space:]]+-[rRfv]+[[:space:]]+(\./)?(node_modules|dist|build|\.cache|\.next|\.nuxt|coverage|out|target|__pycache__|\.pytest_cache)/?[[:space:]]*$'
 SAFE_RM_TMP='^[[:space:]]*(/[^[:space:]]*/)?rm[[:space:]]+-[rRfv]+[[:space:]]+((/private)?/tmp/|\$TMPDIR/)[^[:space:]]*[[:space:]]*$'
-if grep -qE "$SAFE_RM" <<<"$CMD" || grep -qE "$SAFE_RM_TMP" <<<"$CMD"; then
+# WT1: a SINGLE `rm`/`git rm` whose only target is inside a wave worktree (or the
+# other harness work subtrees) is legitimate — cleanup deletes dead code IN the
+# worktree, transformers delete files there. Whole-string-anchored to one target
+# so a compound (`rm .migration/worktrees/x && rm -rf /`) can NOT match and is
+# still caught by the destructive patterns below. The MIG self-protection block
+# above already ran, so manifest/lock/snapshots can't slip through here.
+SAFE_RM_WT='^[[:space:]]*(git[[:space:]]+)?(/[^[:space:]]*/)?rm[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*(\./)?\.migration/(worktrees|standards|baseline|reports|agent-io)/[^[:space:]]*[[:space:]]*$'
+if grep -qE "$SAFE_RM" <<<"$CMD" || grep -qE "$SAFE_RM_TMP" <<<"$CMD" || grep -qE "$SAFE_RM_WT" <<<"$CMD"; then
   exit 0
 fi
 

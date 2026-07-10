@@ -25,7 +25,10 @@ Commands:
     reset-wave      Reset a wave and all its units to pending (for re-planning).
     checkpoint      Snapshot a wave's pre-edit files + record git HEAD.
     list-checkpoints List recorded checkpoints.
-    rollback        True, scoped revert of a wave to its checkpoint.
+    worktree-open   Open a wave's isolated git worktree + branch (worktree mode).
+    worktree-path   Print a wave's worktree path (exit 1 if none); read-only.
+    integrate       Fast-forward a verified wave's branch into the integration branch.
+    rollback        Discard a wave's worktree/branch (worktree mode) or scoped revert.
     check           Run baseline.suite_cmd for a wave; write a suite report.
     record          Record a verification result for a unit (pass/fail + report).
     ledger          Append a line to the human-readable ledger.
@@ -63,7 +66,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ACTIVE_STATUSES = {
     "assessing",
     "planning",
@@ -74,6 +77,23 @@ ACTIVE_STATUSES = {
     "cleaning",
 }
 ALL_STATUSES = ACTIVE_STATUSES | {"done", "rolled-back"}
+
+# A wave's lifecycle. `rollback-failed` is a distinct terminal-bad state: the
+# harness tried to discard/revert the wave and git refused, so the tree may be
+# half-reverted — the harness must STOP rather than re-checkpoint over it.
+WAVE_STATUSES = ("pending", "active", "verified", "rolled-back", "rollback-failed")
+
+# Default execution model. `worktree` gives every wave its own isolated git
+# worktree + branch off a dedicated integration branch (transform + verify happen
+# there; rollback = discard the worktree; integrate = fast-forward the branch).
+# `main-tree` is the legacy model (transform the working tree, snapshot/restore).
+EXECUTION_MODELS = ("worktree", "main-tree")
+
+# Git-ignored directories symlinked into each fresh wave worktree so the suite can
+# run without a full reinstall (a worktree is a clean checkout with no deps). Only
+# those that actually exist in the repo root are linked. Extend via
+# `init --link a,b,c` / `set-strategy --link a,b,c`.
+DEFAULT_LINK_DIRS = ("node_modules", ".venv", "venv", "vendor", ".yarn", ".bundle")
 
 # The project-specific "standards" generated once by the self-mutating phase
 # skills (migrate-profile / -translation-standard / -conventions / -parity-standard).
@@ -110,12 +130,38 @@ def git(root: Path, *args: str, strip: bool = True) -> str | None:
         return None
 
 
+def git_run(root: Path, *args: str) -> tuple[int, str, str]:
+    """Run a git command and return (returncode, stdout, stderr) WITHOUT raising
+    and WITHOUT swallowing the failure. Use this (not `git()`) anywhere a failure
+    must be detected and acted on — worktree/branch/integrate/rollback operations
+    — so the harness never reports success on a git error (fixes the audit's
+    'rollback swallows every git failure' class)."""
+    try:
+        proc = subprocess.run(
+            ["git", *args], cwd=str(root), capture_output=True, text=True
+        )
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    except FileNotFoundError:
+        return 127, "", "git executable not found on PATH"
+
+
+def git_available(root: Path) -> bool:
+    return git(root, "rev-parse", "--is-inside-work-tree") == "true"
+
+
 def find_root(explicit: str | None) -> Path:
+    # Resolution order is kept IDENTICAL to the guard hook (migration-guard.sh):
+    #   explicit --root → MIGRATION_ROOT → CLAUDE_PROJECT_DIR → git toplevel → cwd.
+    # If the two disagreed, `.migration/` could be created where the guard never
+    # looks, silently disarming it in a nested (non-git-root) project (M6/M17).
     if explicit:
         return Path(explicit).resolve()
     env = os.environ.get("MIGRATION_ROOT")
     if env:
         return Path(env).resolve()
+    proj = os.environ.get("CLAUDE_PROJECT_DIR")
+    if proj:
+        return Path(proj).resolve()
     top = git(Path.cwd(), "rev-parse", "--show-toplevel")
     if top:
         return Path(top).resolve()
@@ -190,6 +236,14 @@ def load(root: Path) -> dict:
     # load (and so every command can assume `manifest["standards"]` is a dict).
     if not isinstance(data.get("standards"), dict):
         data["standards"] = {}
+    # Back-compat: a schema-v1 manifest predates the worktree backbone. Default
+    # the new strategy fields so it keeps working under the LEGACY main-tree model
+    # (no branch/worktrees) rather than silently adopting worktree semantics.
+    strat = data.setdefault("strategy", {})
+    strat.setdefault("execution", "main-tree")
+    strat.setdefault("branch", "")
+    strat.setdefault("base_ref", "")
+    strat.setdefault("worktree_link", [])
     return data
 
 
@@ -266,12 +320,58 @@ def cmd_init(root: Path, args) -> None:
                 file=sys.stderr,
             )
     head = git(root, "rev-parse", "HEAD")
+    have_git = git_available(root)
     if head is None:
         print(
             "warning: no git repo detected. Rollback is far safer with git — "
             "consider `git init` before migrating.",
             file=sys.stderr,
         )
+
+    execution = args.execution
+    link_dirs = (
+        [d.strip() for d in args.link.split(",") if d.strip()]
+        if args.link is not None
+        else list(DEFAULT_LINK_DIRS)
+    )
+    # Worktree execution requires git. Without it, fall back to the legacy
+    # main-tree model rather than promising isolation we can't deliver.
+    if execution == "worktree" and not have_git:
+        print(
+            "warning: --execution worktree needs git; no git repo here, so falling "
+            "back to --execution main-tree (transform the working tree + snapshots).",
+            file=sys.stderr,
+        )
+        execution = "main-tree"
+
+    branch = ""
+    base_ref = ""
+    if execution == "worktree":
+        base_ref = args.base_ref or git(root, "rev-parse", "--abbrev-ref", "HEAD") or head
+        branch = args.branch or f"migration/{slug(args.name)}"
+        # A dirty tree at init is fine (we never switch the main tree's branch),
+        # but uncommitted work won't be part of the migration — say so once.
+        # Ignore `.migration/` itself (the lock dir already exists at this point).
+        status = git(root, "status", "--porcelain") or ""
+        dirty = [ln for ln in status.splitlines() if ".migration" not in ln]
+        if dirty:
+            print(
+                "warning: the working tree has uncommitted changes. The migration "
+                f"operates on committed state ({base_ref}); uncommitted work will not "
+                "be included. Commit or stash it first if it should be.",
+                file=sys.stderr,
+            )
+        exists = git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}") is not None
+        if exists and not args.force:
+            die(
+                f"integration branch '{branch}' already exists. Choose another with "
+                "--branch, or pass --force to reuse it."
+            )
+        if not exists:
+            rc, _, err = git_run(root, "branch", branch, base_ref)
+            if rc != 0:
+                die(f"could not create integration branch '{branch}' at {base_ref}: {err}")
+
     manifest = {
         "schema": SCHEMA_VERSION,
         "name": args.name,
@@ -281,8 +381,15 @@ def cmd_init(root: Path, args) -> None:
         "updated": now(),
         "strategy": {
             "transform": args.transform or "",
-            "rollback": "git+snapshots",
+            "rollback": "worktree" if execution == "worktree" else "git+snapshots",
             "parallelism": args.parallelism,
+            # Worktree backbone: which execution model, the dedicated integration
+            # branch verified waves land on, the ref it forked from, and the
+            # git-ignored dep dirs to symlink into each fresh wave worktree.
+            "execution": execution,
+            "branch": branch,
+            "base_ref": base_ref,
+            "worktree_link": link_dirs,
         },
         "risk_register": [],
         "baseline": {"captured": False, "suite_cmd": "", "characterization": []},
@@ -294,10 +401,25 @@ def cmd_init(root: Path, args) -> None:
         "standards": {},
     }
     save(root, manifest)
-    for sub in ("snapshots", "reports", "baseline", "standards"):
+    for sub in ("snapshots", "reports", "baseline", "standards", "worktrees"):
         (mig_dir(root) / sub).mkdir(parents=True, exist_ok=True)
+    ensure_migration_gitignore(root)
     append_ledger(root, f"Initialized migration **{args.name}**. Goal: {args.goal or '(unset)'}")
-    print(f"Initialized migration '{args.name}' at {mig_dir(root)}")
+    if execution == "worktree":
+        append_ledger(
+            root,
+            f"Worktree backbone: integration branch `{branch}` forked from `{base_ref}`; "
+            "each wave transforms + verifies in its own worktree.",
+        )
+        print(
+            f"Initialized migration '{args.name}' at {mig_dir(root)}\n"
+            f"  execution: worktree   integration branch: {branch}  (from {base_ref})"
+        )
+    else:
+        print(
+            f"Initialized migration '{args.name}' at {mig_dir(root)}\n"
+            "  execution: main-tree (legacy)"
+        )
 
 
 def cmd_show(root: Path, args) -> None:
@@ -403,6 +525,16 @@ def _status_precondition(root: Path, m: dict, target: str) -> str | None:
             reasons.append(
                 "not a git repository — rollback is unsafe without git; run `git init` first"
             )
+        # Worktree model: the whole backbone (per-wave worktrees, integrate,
+        # rollback-by-discard) hangs off the integration branch — refuse to start
+        # if it's gone.
+        if is_worktree_mode(m):
+            intbranch = integration_branch(m)
+            if git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{intbranch}") is None:
+                reasons.append(
+                    f"integration branch '{intbranch}' is missing — re-run `init "
+                    "--execution worktree` or create it"
+                )
         if reasons:
             return "; ".join(reasons)
     elif target == "documenting":
@@ -415,12 +547,22 @@ def _status_precondition(root: Path, m: dict, target: str) -> str | None:
         if bad:
             return f"active wave(s) not fully verified: {', '.join(bad)}"
     elif target in ("cleaning", "done"):
-        # Every wave must be verified. A rolled-back wave no longer counts (F1):
-        # it must be reset (`reset-wave`) and re-done, or the whole migration
-        # aborted via top-level `set-status rolled-back`, before completing.
+        # Every wave must be verified. A rolled-back / rollback-failed wave no
+        # longer counts (F1): it must be reset (`reset-wave`) and re-done, or the
+        # whole migration aborted via top-level `set-status rolled-back`.
         bad = [w["id"] for w in waves if w["status"] != "verified"]
         if bad:
             return f"wave(s) not verified: {', '.join(bad)}"
+        # Worktree model: a verified wave still living in its worktree hasn't
+        # landed on the integration branch — it must be `integrate`d first, or the
+        # final branch would be missing that wave's work.
+        if is_worktree_mode(m):
+            unmerged = [w["id"] for w in waves if not w.get("integrated")]
+            if unmerged:
+                return (
+                    f"wave(s) verified but not integrated: {', '.join(unmerged)} — run "
+                    "`integrate --wave <id>` for each before completing"
+                )
     return None
 
 
@@ -466,6 +608,8 @@ def cmd_set_strategy(root: Path, args) -> None:
         m["strategy"]["rollback"] = args.rollback
     if args.parallelism is not None:
         m["strategy"]["parallelism"] = args.parallelism
+    if getattr(args, "link", None) is not None:
+        m["strategy"]["worktree_link"] = [d.strip() for d in args.link.split(",") if d.strip()]
     save(root, m)
     print("strategy updated:", json.dumps(m["strategy"]))
 
@@ -593,9 +737,8 @@ def cmd_add_unit(root: Path, args) -> None:
 
 
 def cmd_set_wave_status(root: Path, args) -> None:
-    valid = ("pending", "active", "verified", "rolled-back")
-    if args.value not in valid:
-        die(f"wave status must be one of {valid}")
+    if args.value not in WAVE_STATUSES:
+        die(f"wave status must be one of {WAVE_STATUSES}")
     m = load(root)
     wave = find_wave(m, args.wave)
     # Refuse to mark a wave verified while any of its units is not verified (B2).
@@ -633,10 +776,24 @@ def cmd_set_unit_status(root: Path, args) -> None:
     wave = find_wave(m, args.wave)
     unit = find_unit(wave, args.unit)
     old = unit["status"]
+    # M15: `verified` is the verification gate's own verdict — it must go through
+    # `record` (which stores a report, bumps attempts, and auto-rolls-back on a
+    # fail), not a bare status flip that would let an agent walk a unit to verified
+    # with no evidence. Require --force (logged) for a direct flip to verified.
+    if args.value == "verified" and old != "verified" and not args.force:
+        die(
+            f"refusing to set {args.unit} directly to 'verified' — that is the "
+            "verification gate's verdict. Use `record --result pass` (stores a "
+            "report), or pass --force (it will be logged)."
+        )
     unit["status"] = args.value
     if args.report:
         unit["report"] = args.report
     save(root, m)
+    # Every unit transition is ledgered (previously this command was the one silent
+    # side door around the audit trail).
+    forced = " (FORCED)" if (args.value == "verified" and old != "verified") else ""
+    append_ledger(root, f"{args.wave}/{args.unit}: {old} → {args.value}{forced}")
     print(f"{args.wave}/{args.unit}: {old} → {args.value}")
 
 
@@ -648,6 +805,18 @@ def cmd_reset_wave(root: Path, args) -> None:
     m = load(root)
     wave = find_wave(m, args.wave)
     old = wave["status"]
+    # A `rollback-failed` wave means a previous discard/revert left git in an
+    # unknown state; re-planning over it could enshrine a half-reverted tree.
+    # Refuse until a human repairs it and clears the flag.
+    if old == "rollback-failed" and not args.force:
+        die(
+            f"{args.wave} is 'rollback-failed' — its worktree/branch could not be "
+            "discarded cleanly. Repair git by hand (remove the stale worktree/branch), "
+            "then `set-wave-status --wave <id> rolled-back`, before reset-wave. Use "
+            "--force only if you are sure the tree is clean (logged)."
+        )
+    if old == "rollback-failed" and args.force:
+        append_ledger(root, f"FORCED reset of rollback-failed wave {args.wave}")
     wave["status"] = "pending"
     for u in wave["units"]:
         u["status"] = "pending"
@@ -670,6 +839,60 @@ def _snapshot_files(root: Path, dest: Path, files: list[str]) -> list[str]:
         shutil.copy2(src, target)
         saved.append(rel)
     return saved
+
+
+# --------------------------------------------------------------------------- #
+# Worktree backbone (worktree-execution model)
+# --------------------------------------------------------------------------- #
+def integration_branch(m: dict) -> str:
+    """The dedicated branch that verified waves are fast-forwarded onto."""
+    return m.get("strategy", {}).get("branch") or f"migration/{slug(m.get('name', ''))}"
+
+
+def wave_branch(m: dict, wid: str) -> str:
+    """The per-wave branch, forked from the integration branch tip for one wave.
+    Uses a `--` separator (not `/`) so it stays a SIBLING of the integration
+    branch: `migration/api-v2` + `/w1` would collide in git's ref store (a ref
+    can't be both a file and a directory), whereas `migration/api-v2--w1` cannot."""
+    return f"{integration_branch(m)}--{wid}"
+
+
+def worktree_dir(root: Path, wid: str) -> Path:
+    return mig_dir(root) / "worktrees" / wid
+
+
+def is_worktree_mode(m: dict) -> bool:
+    return m.get("strategy", {}).get("execution") == "worktree"
+
+
+def ensure_migration_gitignore(root: Path) -> None:
+    """Make git ignore everything under `.migration/` (snapshots, worktree
+    checkouts, manifest) so wave worktrees and backups never show up as untracked
+    churn in the tree being migrated."""
+    gi = mig_dir(root) / ".gitignore"
+    if not gi.exists():
+        gi.parent.mkdir(parents=True, exist_ok=True)
+        gi.write_text("# Managed by migration-harness — ignore all harness state.\n*\n")
+
+
+def link_worktree_deps(root: Path, wt: Path, names: list[str]) -> list[str]:
+    """Symlink each existing git-ignored dependency dir (node_modules, .venv, …)
+    from the repo root into a fresh wave worktree, so its suite can run without a
+    full reinstall. Silently skips ones that don't exist; never overwrites."""
+    linked: list[str] = []
+    for name in names:
+        if not name or name in (".", "..") or os.path.isabs(name) or ".." in Path(name).parts:
+            continue
+        src = root / name
+        dst = wt / name
+        if src.exists() and not dst.exists():
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                os.symlink(src.resolve(), dst)
+                linked.append(name)
+            except OSError as exc:  # pragma: no cover - filesystem specific
+                print(f"warning: could not link {name} into worktree: {exc}", file=sys.stderr)
+    return linked
 
 
 # --------------------------------------------------------------------------- #
@@ -880,9 +1103,19 @@ def _perform_rollback(root: Path, cp: dict, wave: dict | None, git_reset: bool) 
         _git_scoped_revert(root, head, pathspecs)
         summary = f"git scoped revert of {len(pathspecs)} path(s) to {head[:8]}"
     else:
-        restored, removed = _snapshot_restore(root, cp)
+        # Clean FIRST (delete wave-created untracked files), then restore — so a
+        # restored file is never deleted by a clean that runs after it. Scope the
+        # clean to the checkpoint's LITERAL captured/absent paths, never the wave's
+        # raw glob patterns: git expands `*` across `/`, so a glob clean could
+        # delete files the checkpoint never captured (unrecoverable).
         if git_available:
-            _git_clean_scoped(root, pathspecs)
+            literal: list[str] = []
+            for p in list(cp.get("files", [])) + list(cp.get("absent", [])):
+                s = _safe_pathspec(p)
+                if s:
+                    literal.append(s)
+            _git_clean_scoped(root, literal)
+        restored, removed = _snapshot_restore(root, cp)
         summary = f"snapshot restore ({len(restored)} restored, {len(removed)} removed)"
 
     if wave is not None:
@@ -1012,8 +1245,249 @@ def cmd_list_checkpoints(root: Path, args) -> None:
         )
 
 
+def cmd_worktree_open(root: Path, args) -> None:
+    """Open a wave's isolated worktree + branch (worktree execution model). The
+    wave's transformers edit INSIDE this worktree and verify runs its suite there,
+    so the main working tree is never touched until `integrate`. Idempotent: a
+    wave that already has a live worktree is returned as-is (resume-safe)."""
+    m = load(root)
+    wave = find_wave(m, args.wave)
+    if not is_worktree_mode(m):
+        die(
+            "worktree-open requires a worktree-execution migration (init --execution "
+            f"worktree). This migration uses execution="
+            f"{m['strategy'].get('execution')!r}; use `checkpoint --wave` instead."
+        )
+    if not git_available(root):
+        die("worktree-open requires a git repository")
+
+    wid = wave["id"]
+    wt = worktree_dir(root, wid)
+    branch = wave_branch(m, wid)
+    intbranch = integration_branch(m)
+
+    # Resume/idempotence: a live worktree already exists → keep it. Opening again
+    # would fork a second branch and orphan any in-progress edits.
+    if wave.get("worktree") and (root / wave["worktree"]).exists():
+        print(str(root / wave["worktree"]))
+        return
+
+    base_sha = git(root, "rev-parse", intbranch)
+    if not base_sha:
+        die(
+            f"integration branch '{intbranch}' not found — was this migration "
+            "initialized with `init --execution worktree`?"
+        )
+
+    # Clear any stale registration/branch/dir from a previously aborted open.
+    git_run(root, "worktree", "prune")
+    if git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}") is not None:
+        git_run(root, "branch", "-D", branch)
+    if wt.exists():
+        shutil.rmtree(wt, ignore_errors=True)
+
+    wt.parent.mkdir(parents=True, exist_ok=True)
+    rc, _, err = git_run(root, "worktree", "add", "-b", branch, str(wt), intbranch)
+    if rc != 0:
+        die(f"could not create worktree for {wid}: {err}")
+    linked = link_worktree_deps(root, wt, m["strategy"].get("worktree_link", []))
+
+    # Belt-and-suspenders: snapshot the wave's pre-edit target files (a backup on
+    # top of the branch) and record a checkpoint so `wave['checkpoint']` stays
+    # populated and the snapshot fallback in rollback has content. Pre-edit content
+    # == the fresh worktree checkout, so snapshot from there.
+    patterns: list[str] = []
+    for u in wave["units"]:
+        patterns.extend(u.get("paths", []))
+    present, absent = _resolve_targets(wt, patterns)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    cid = f"cp-{ts}-open-{slug(wid)}-{uuid.uuid4().hex[:6]}"
+    snap_dir = mig_dir(root) / "snapshots" / cid / "files"
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    saved = _snapshot_files(wt, snap_dir, present)
+    meta = {
+        "id": cid,
+        "label": f"open-{wid}",
+        "created": now(),
+        "git_head": base_sha,
+        "git_dirty": False,
+        "committed": True,
+        "files": saved,
+        "absent": absent,
+        "worktree": True,
+    }
+    (mig_dir(root) / "snapshots" / cid / "meta.json").write_text(
+        json.dumps(meta, indent=2) + "\n"
+    )
+    m.setdefault("checkpoints", []).append(meta)
+
+    rel_wt = wt.relative_to(root).as_posix()
+    wave["worktree"] = rel_wt
+    wave["branch"] = branch
+    wave["base"] = base_sha
+    wave["checkpoint"] = cid
+    save(root, m)
+    append_ledger(
+        root,
+        f"Opened worktree for {wid}: `{rel_wt}` on `{branch}` (from {base_sha[:8]}); "
+        f"linked deps: {', '.join(linked) or 'none'}",
+    )
+    print(str(wt))
+
+
+def cmd_worktree_path(root: Path, args) -> None:
+    """Read-only: print a wave's live worktree path (exit 1 if it has none), so a
+    skill can `cd` there or pass it to a transformer. Holds no lock."""
+    m = load(root)
+    wave = find_wave(m, args.wave)
+    wt = wave.get("worktree")
+    if not wt:
+        sys.exit(1)
+    p = root / wt
+    if not p.exists():
+        sys.exit(1)
+    print(str(p))
+
+
+def cmd_integrate(root: Path, args) -> None:
+    """Fast-forward a VERIFIED wave's branch into the integration branch, then
+    tear down its worktree. Every git step is checked; on any failure the command
+    stops (non-zero) rather than reporting a success that didn't happen."""
+    m = load(root)
+    wave = find_wave(m, args.wave)
+    if not is_worktree_mode(m):
+        die("integrate is only for worktree-execution migrations")
+    wid = wave["id"]
+    if wave.get("integrated"):
+        print(f"{wid} already integrated @ {str(wave['integrated'])[:8]}")
+        return
+    if wave["status"] != "verified":
+        if not args.force:
+            die(
+                f"refusing to integrate {wid}: status is '{wave['status']}', expected "
+                "'verified'. Verify the wave first, or pass --force (logged)."
+            )
+        append_ledger(root, f"FORCED integrate of {wid} despite status '{wave['status']}'")
+
+    wt = root / (wave.get("worktree") or "")
+    branch = wave.get("branch")
+    intbranch = integration_branch(m)
+    if not wave.get("worktree") or not wt.exists():
+        die(
+            f"{wid} has no live worktree to integrate. If it was already integrated "
+            "or discarded, there is nothing to do."
+        )
+
+    # Commit any pending edits in the worktree onto the wave branch.
+    rc, _, err = git_run(root, "-C", str(wt), "add", "-A")
+    if rc != 0:
+        die(f"git add failed in worktree: {err}")
+    staged_rc, _, _ = git_run(root, "-C", str(wt), "diff", "--cached", "--quiet")
+    if staged_rc == 1:  # 1 = there ARE staged changes to commit
+        title = (wave.get("title") or "").strip()
+        commit = ["-C", str(wt), "commit", "-m", f"migration: wave {wid}{(' — ' + title) if title else ''}"]
+        if args.no_verify:
+            commit.append("--no-verify")
+        rc, _, err = git_run(root, *commit)
+        if rc != 0:
+            die(f"commit failed in worktree (pre-commit hook rejection? author unset?): {err}")
+    elif staged_rc != 0:
+        die(f"could not inspect worktree staging state (git diff rc={staged_rc})")
+
+    wave_sha = git(root, "rev-parse", branch)
+    int_sha = git(root, "rev-parse", intbranch)
+    if not wave_sha or not int_sha:
+        die("could not resolve branch tips for integration")
+    # Sequential waves ⇒ the integration branch must not have moved since this
+    # worktree forked from it, so this is a strict fast-forward.
+    anc_rc, _, _ = git_run(root, "merge-base", "--is-ancestor", int_sha, wave_sha)
+    if anc_rc != 0:
+        die(
+            f"'{intbranch}' has advanced since {wid} was opened — not a fast-forward. "
+            "Integrate one wave at a time; re-open this wave off the current tip."
+        )
+    rc, _, err = git_run(root, "branch", "-f", intbranch, wave_sha)
+    if rc != 0:
+        die(f"could not fast-forward '{intbranch}': {err}")
+    # Verify the ref actually moved BEFORE tearing down the worktree.
+    if git(root, "rev-parse", intbranch) != wave_sha:
+        die(f"integration verification failed: '{intbranch}' did not advance to {wave_sha[:8]}")
+
+    rc, _, err = git_run(root, "worktree", "remove", "--force", str(wt))
+    if rc != 0:
+        die(
+            f"integration merged into '{intbranch}' but worktree removal failed: {err}. "
+            f"Remove it by hand (`git worktree remove --force {wt}`), then re-run "
+            "integrate to delete the wave branch."
+        )
+    git_run(root, "branch", "-D", branch)  # its commits now live on intbranch
+
+    wave["integrated"] = wave_sha
+    wave["worktree"] = ""
+    save(root, m)
+    append_ledger(
+        root,
+        f"Integrated {wid} → `{intbranch}` @ {wave_sha[:8]} (worktree removed, branch merged)",
+    )
+    print(f"integrated {wid} → {intbranch} @ {wave_sha[:8]}")
+
+
+def _rollback_worktree(root: Path, wave: dict) -> tuple[str, bool]:
+    """Discard a wave's worktree + branch — the worktree-model rollback. Because
+    the integration branch never received the wave, this is total and safe. Every
+    git step is checked; returns (summary, ok). On failure the wave is set to
+    `rollback-failed` and the caller must STOP."""
+    wt = root / (wave.get("worktree") or "")
+    branch = wave.get("branch")
+    errors: list[str] = []
+    if wave.get("worktree"):
+        if wt.exists():
+            rc, _, err = git_run(root, "worktree", "remove", "--force", str(wt))
+            if rc != 0:
+                git_run(root, "worktree", "prune")
+                if wt.exists():
+                    errors.append(f"worktree remove: {err or 'still present'}")
+        git_run(root, "worktree", "prune")
+    if branch and git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}") is not None:
+        rc, _, err = git_run(root, "branch", "-D", branch)
+        if rc != 0:
+            errors.append(f"branch -D {branch}: {err}")
+    if errors:
+        wave["status"] = "rollback-failed"
+        return "; ".join(errors), False
+    wave["worktree"] = ""
+    wave["status"] = "rolled-back"
+    return "discarded worktree + branch (integration branch untouched)", True
+
+
 def cmd_rollback(root: Path, args) -> None:
     m = load(root)
+
+    # Worktree model: discarding the wave's worktree + branch IS the rollback.
+    # The integration branch never received the wave, so this is a true, total,
+    # instantaneous revert with no snapshot/glob/clean machinery to get wrong.
+    if args.wave and is_worktree_mode(m):
+        wave = find_wave(m, args.wave)
+        if wave.get("worktree") or wave.get("branch"):
+            summary, ok = _rollback_worktree(root, wave)
+            save(root, m)
+            if not ok:
+                append_ledger(
+                    root,
+                    f"ROLLBACK FAILED for {args.wave}: {summary}. Wave left "
+                    "'rollback-failed' — STOP, repair git by hand, do NOT re-checkpoint over it.",
+                )
+                print(
+                    f"rollback FAILED for {args.wave}: {summary} — wave marked "
+                    "'rollback-failed'; do not proceed",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            append_ledger(root, f"Rolled back {args.wave} — {summary}")
+            print(f"rolled back {args.wave} — {summary}")
+            return
+        # No live worktree (never opened) → fall through to the snapshot path.
+
     cps = m.get("checkpoints", [])
     if not cps:
         die("no checkpoints to roll back to")
@@ -1055,8 +1529,16 @@ def cmd_check(root: Path, args) -> None:
     the manifest (so it needn't hold the lock while the suite runs); the
     adversarial verdict still goes through `record`."""
     m = load(root)
-    find_wave(m, args.wave)  # validate the wave exists before writing a report
+    wave = find_wave(m, args.wave)  # validate the wave exists before writing a report
     suite = (m.get("baseline", {}) or {}).get("suite_cmd", "") or ""
+    # Worktree model: the migrated code lives in the wave's worktree, so the suite
+    # must run THERE — running it in the main tree would test the un-migrated code
+    # and report a green no-op. Fall back to the repo root (legacy main-tree model,
+    # or a wave already integrated).
+    run_dir = root
+    wt = wave.get("worktree")
+    if wt and (root / wt).exists():
+        run_dir = root / wt
     reports_dir = mig_dir(root) / "reports" / args.wave
     reports_dir.mkdir(parents=True, exist_ok=True)
     report_file = reports_dir / "_suite.md"
@@ -1077,13 +1559,15 @@ def cmd_check(root: Path, args) -> None:
         return  # exit 0: an unconfigured suite is a notice, not a crash
 
     proc = subprocess.run(
-        suite, shell=True, cwd=str(root), capture_output=True, text=True
+        suite, shell=True, cwd=str(run_dir), capture_output=True, text=True
     )
     passed = proc.returncode == 0
     verdict = "PASS" if passed else "FAIL"
+    where = "worktree " + wt if run_dir != root else "repo root"
     report_file.write_text(
         f"# Suite check — {args.wave}\n\n"
         f"- Command: `{suite}`\n"
+        f"- Ran in: {where}\n"
         f"- Recorded: {now()}\n"
         f"- Exit code: {proc.returncode}\n"
         f"- Result: **{verdict}**\n\n"
@@ -1134,6 +1618,23 @@ def cmd_record(root: Path, args) -> None:
         cid = wave.get("checkpoint")
         if args.no_rollback:
             pass
+        elif is_worktree_mode(m) and (wave.get("worktree") or wave.get("branch")):
+            # Worktree model: auto-rollback = discard the wave's worktree + branch
+            # (the same total, safe revert `rollback --wave` performs). Never fall
+            # through to the snapshot path, which would leave the worktree/branch
+            # orphaned.
+            summary, ok = _rollback_worktree(root, wave)
+            if ok:
+                append_ledger(
+                    root, f"Auto-rollback of {args.wave} on failed gate — {summary}"
+                )
+                rolled = True
+            else:
+                append_ledger(
+                    root,
+                    f"AUTO-ROLLBACK FAILED for {args.wave}: {summary} — wave left "
+                    "'rollback-failed'; STOP and repair git by hand",
+                )
         elif not cid:
             append_ledger(
                 root,
@@ -1180,6 +1681,24 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--goal", default="")
     s.add_argument("--transform", default="")
     s.add_argument("--parallelism", type=int, default=4)
+    s.add_argument(
+        "--execution", choices=EXECUTION_MODELS, default="worktree",
+        help="worktree (default): per-wave isolated worktree+branch off a dedicated "
+        "integration branch; main-tree: legacy in-place transform + snapshots",
+    )
+    s.add_argument(
+        "--branch",
+        help="integration branch name (worktree mode; default migration/<name>)",
+    )
+    s.add_argument(
+        "--base-ref",
+        help="ref the integration branch forks from (worktree mode; default current branch)",
+    )
+    s.add_argument(
+        "--link",
+        help="comma-separated git-ignored dep dirs to symlink into each wave worktree "
+        f"(default: {','.join(DEFAULT_LINK_DIRS)})",
+    )
     s.add_argument("--force", action="store_true")
     s.set_defaults(func=cmd_init, mutates=True)
 
@@ -1208,10 +1727,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--force", action="store_true", help="bypass phase preconditions (logged)")
     s.set_defaults(func=cmd_set_status, mutates=True)
 
-    s = sub.add_parser("set-strategy", help="Set transform/rollback/parallelism")
+    s = sub.add_parser("set-strategy", help="Set transform/rollback/parallelism/link")
     s.add_argument("--transform")
     s.add_argument("--rollback")
     s.add_argument("--parallelism", type=int)
+    s.add_argument(
+        "--link",
+        help="comma-separated git-ignored dep dirs to symlink into future wave worktrees",
+    )
     s.set_defaults(func=cmd_set_strategy, mutates=True)
 
     s = sub.add_parser("add-risk", help="Append to the risk register")
@@ -1276,6 +1799,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="pending|in-progress|migrated|verified|failed|deferred|rolled-back",
     )
     s.add_argument("--report")
+    s.add_argument(
+        "--force", action="store_true",
+        help="allow a direct flip to 'verified' (bypasses `record`; logged)",
+    )
     s.set_defaults(func=cmd_set_unit_status, mutates=True)
 
     s = sub.add_parser(
@@ -1305,6 +1832,34 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("list-checkpoints", help="List checkpoints").set_defaults(
         func=cmd_list_checkpoints
     )
+
+    s = sub.add_parser(
+        "worktree-open",
+        help="Open a wave's isolated worktree + branch (worktree execution model)",
+    )
+    s.add_argument("--wave", required=True)
+    s.set_defaults(func=cmd_worktree_open, mutates=True)
+
+    s = sub.add_parser(
+        "worktree-path", help="Print a wave's worktree path (exit 1 if none); read-only"
+    )
+    s.add_argument("--wave", required=True)
+    s.set_defaults(func=cmd_worktree_path)
+
+    s = sub.add_parser(
+        "integrate",
+        help="Fast-forward a verified wave's branch into the integration branch",
+    )
+    s.add_argument("--wave", required=True)
+    s.add_argument(
+        "--force", action="store_true",
+        help="integrate even if the wave is not 'verified' (logged)",
+    )
+    s.add_argument(
+        "--no-verify", action="store_true",
+        help="skip pre-commit hooks when committing the worktree",
+    )
+    s.set_defaults(func=cmd_integrate, mutates=True)
 
     s = sub.add_parser("check", help="Run baseline.suite_cmd for a wave (mechanical verify)")
     s.add_argument("--wave", required=True)

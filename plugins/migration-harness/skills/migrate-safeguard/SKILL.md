@@ -39,6 +39,15 @@ This phase builds the safety net the whole harness leans on. Verification later 
    `.migration/baseline/` so they're versioned with the migration. These are temporary scaffolding that
    makes the migration safe; note which are throwaway vs. worth keeping.
 
+   **Worktree caveat (worktree mode).** Each wave later transforms in a worktree forked from the
+   integration branch `migration/<name>`, so a wave's suite only sees what is *committed on that branch*.
+   The project's existing suite scaffolding is already committed, so it runs there automatically — but
+   the characterization tests you author now are **not yet on the integration branch**. Before you hand
+   off to execute (step 7), commit these new test files onto `migration/<name>` — there is no migration.py
+   command for this; do it as a git step (e.g. `git worktree add` a short-lived worktree on that branch,
+   `git add` the test files, `git commit`, then remove the worktree). Skip it and the wave worktrees will
+   run without your new tests and the baseline will protect nothing.
+
 3. **Prefer characterization over faith.** For pure functions, snapshot input→output pairs. For modules
    with side effects, capture the observable contract (returned values, emitted events, written files,
    HTTP shapes). The point is a cheap, mechanical "did the observable behavior change?" check that the
@@ -61,9 +70,14 @@ This phase builds the safety net the whole harness leans on. Verification later 
    artifacts you named exist on disk. So capture the artifacts (steps 2–3) *first*, then set the flag —
    `captured: true` can't be a bare promise with no suite and no baseline behind it.
 
-6. **Take the first checkpoint.** `migration.py checkpoint --label baseline --commit` (commit is worth
-   it here — a clean, known-good restore point at the start). This is the floor you can always return
-   to if the whole migration goes sideways.
+6. **Take the first checkpoint.** In worktree mode the durable floor already exists as a real commit —
+   the integration branch's fork point (`strategy.base_ref`), which the user's working tree is never
+   moved off for the whole migration. So do **not** `--commit` here: that would land a commit on the
+   user's branch — the one thing this backbone promises to leave untouched. Take a non-committing baseline
+   record: `migration.py checkpoint --label baseline` (no `--commit`). The floor you can always return to
+   if the whole migration goes sideways is that integration-branch base, not a new commit on the user's
+   branch. (Legacy `main-tree` model only: `migration.py checkpoint --label baseline --commit` still
+   applies — there the committed checkpoint itself is the floor.)
 
 7. **Hand off.** `migration.py set-status executing`, then continue with
    `/migration-harness:migrate-execute` to run the first wave. This transition is gated: the harness
@@ -75,7 +89,7 @@ This phase builds the safety net the whole harness leans on. Verification later 
 ```
 Suite: <cmd> → <green | green-except-known: N tests>
 Characterization added: <count> tests covering <areas>  (baseline artifacts in .migration/baseline/)
-Baseline checkpoint: <cp-id> (committed)
+Baseline checkpoint: <cp-id>  (worktree: floor = integration base <base_ref>, uncommitted | main-tree: committed)
 ```
 
 Invest the most characterization where the plan marked the most risk and where existing coverage is

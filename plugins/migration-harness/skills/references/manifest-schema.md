@@ -19,26 +19,33 @@ evaluated at runtime).
 
 ```
 .migration/                    # protected state — written ONLY by migration.py
+├── .gitignore                 # `*` — hides all harness state (worktree checkouts,
+│                              #   snapshots, manifest) from the migrated tree
 ├── manifest.json              # the plan + live state (schema below)
 ├── manifest.lock              # advisory flock target for mutating commands
 ├── ledger.md                  # append-only human-readable decision/change log
 ├── snapshots/<cp-id>/         # per-checkpoint: meta.json + files/<mirrored tree>
+├── worktrees/<wave-id>/       # per-wave live git worktree (worktree mode only)
 ├── reports/<wave>/<unit>.md   # verification reports (+ _suite.md from `check --wave`)
 ├── baseline/                  # captured baseline behavior (characterization outputs)
 └── standards/<name>.md        # project standards generated once by the phase skills
                                #   (profile, translation, conventions, parity)
 ```
 
-## `manifest.json` (schema v1)
+## `manifest.json` (schema v2)
 
-The current `SCHEMA_VERSION` is **1**. `load()` does **not** hard-fail on a mismatch: if the
-manifest's `schema` differs from the tool's version, it prints a warning to stderr naming both
-versions and reads the file anyway (a forward-compatible read still works — some fields may just be
-missing or interpreted differently).
+The current `SCHEMA_VERSION` is **2** (bumped for the worktree backbone — the `strategy.execution`
++ integration-branch fields and the per-wave `worktree`/`branch`/`base`/`integrated` fields below).
+`load()` does **not** hard-fail on a mismatch: if the manifest's `schema` differs from the tool's
+version, it prints a warning to stderr naming both versions and reads the file anyway (a
+forward-compatible read still works — some fields may just be missing or interpreted differently). A
+**schema-v1** manifest predates the backbone; `load()` back-fills `strategy.execution="main-tree"`
+(plus empty `branch`/`base_ref` and `worktree_link: []`), so it keeps running unchanged under the
+legacy main-tree model rather than silently adopting worktree semantics.
 
 ```jsonc
 {
-  "schema": 1,
+  "schema": 2,
   "name": "string",                 // short migration name
   "goal": "string",                 // what "done" means, in one or two sentences
   "status": "assessing",            // lifecycle status (see below)
@@ -46,8 +53,14 @@ missing or interpreted differently).
   "updated": "ISO-8601Z",
   "strategy": {
     "transform": "string",          // the transformation rule, plainly stated
-    "rollback": "git+snapshots",
-    "parallelism": 4                // max transformer/verifier subagents in flight
+    "rollback": "worktree",         // "worktree" in worktree mode, else "git+snapshots"
+    "parallelism": 4,               // max transformer/verifier subagents in flight
+    "execution": "worktree",        // "worktree" (default) | "main-tree" (legacy) — see below
+    "branch": "migration/<slug>",   // dedicated integration branch (worktree mode; "" in main-tree)
+    "base_ref": "string",           // ref the integration branch forked from (worktree mode)
+    "worktree_link": [              // git-ignored dep dirs symlinked into each wave worktree
+      "node_modules", ".venv", "venv", "vendor", ".yarn", ".bundle"
+    ]                               // ^ default set; override with init/set-strategy --link
   },
   "risk_register": [
     { "id": "risk-1", "area": "string", "risk": "string",
@@ -80,10 +93,15 @@ missing or interpreted differently).
   "waves": [
     {
       "id": "wave-1", "title": "string",
-      "status": "pending|active|verified|rolled-back",
+      "status": "pending|active|verified|rolled-back|rollback-failed",
       "risk": "low|med|high",       // per-wave risk (default low), decided in plan
       "gate": false,                // true = pause for a human before this wave
       "checkpoint": "cp-id",        // checkpoint taken before this wave
+      // Worktree-mode fields (set by worktree-open; absent/empty in main-tree mode):
+      "worktree": "",               // repo-relative path to the wave's live worktree ("" = none/closed)
+      "branch": "migration/<name>--wave-1",  // the per-wave branch, forked off the integration tip
+      "base": "sha",                // commit the worktree forked from (integration-branch tip at open)
+      "integrated": "sha",          // commit once merged into the integration branch (absent until then)
       "units": [
         { "id": "wave-1-u1", "title": "string", "paths": ["src/a.ts"],
           "risk": "low|med|high",
@@ -109,6 +127,30 @@ instead of the global one — so a heterogeneous migration can give one unit a d
 deliberately preserves it, so the retry bound isn't reset away). Wave **`risk`** and **`gate`**
 persist the plan's per-wave risk and human-gate decisions so they survive a resume instead of living
 only in prose.
+
+### Execution models (worktree backbone)
+
+`strategy.execution` picks how waves are applied:
+
+- **`worktree`** (default) — every wave transforms + verifies in its **own isolated git worktree +
+  branch**, off a dedicated **integration branch** (`strategy.branch`, forked from `strategy.base_ref`
+  at `init`). `worktree-open --wave W` cuts the wave's branch `migration/<name>--<wave-id>` off the
+  integration tip, checks it out into `.migration/worktrees/<wave-id>/`, symlinks the
+  `strategy.worktree_link` dep dirs, and records `worktree`/`branch`/`base`. The main working tree is
+  never touched until the wave is done. **`integrate --wave W`** commits the worktree's changes on its
+  branch, **fast-forwards** the integration branch to it, removes the worktree, deletes the wave
+  branch, and stamps `integrated` with the merged sha. **Rollback = discard**: `rollback --wave W`
+  (and a failed `record`) `git worktree remove --force` + `branch -D` the wave, leaving the integration
+  branch untouched — total and safe because the integration branch never received the wave.
+- **`main-tree`** (legacy) — the pre-v2 model: transform the working tree in place, snapshot with
+  `checkpoint --wave`, and restore with the scoped-revert `rollback`. Unchanged from schema v1; a
+  schema-v1 manifest is back-filled to this model. Used automatically when git is unavailable at
+  `init` (worktree isolation needs git).
+
+**Wave status `rollback-failed`** is a new **terminal-bad** state: a worktree discard (or main-tree
+revert) that git refused, so the tree may be half-reverted. **STOP** — do not re-checkpoint or
+re-run over it. Repair git by hand (remove the stale worktree/branch), then `set-wave-status --wave W
+rolled-back` before `reset-wave` (which otherwise refuses a `rollback-failed` wave without `--force`).
 
 ### Project standards
 
@@ -148,27 +190,33 @@ a batch of units with no unmet cross-dependencies, so its units can run in paral
 
 | Command | Purpose |
 | --- | --- |
-| `init --name N [--goal G] [--transform T] [--parallelism K] [--force]` | Create `.migration/` + manifest. `--force` first backs up the existing manifest to `manifest.bak-<UTC>.json` and warns about now-orphaned `snapshots/` dirs. |
+| `init --name N [--goal G] [--transform T] [--parallelism K] [--execution worktree\|main-tree] [--branch B] [--base-ref R] [--link a,b] [--force]` | Create `.migration/` + manifest (+ `.gitignore` of `*`). `--execution` defaults to `worktree` (creates the integration branch `--branch`, default `migration/<name>`, off `--base-ref`, default the current branch; falls back to `main-tree` if git is absent). `--link` overrides the dep dirs symlinked into each wave worktree. `--force` first backs up the existing manifest to `manifest.bak-<UTC>.json`, warns about now-orphaned `snapshots/` dirs, and reuses an existing integration branch. |
 | `show` / `status` | Print full manifest / short summary. `status` also prints `strategy.parallelism`, any per-unit `transform` override, and a `Standards:` line listing which standards are generated (`none` if empty). |
 | `set-standard --name N --path P [--source S] [--target T]` | Register a generated project standard in `standards[N]` (mutating; appends a ledger line). Unknown `N` warns but still registers, so the skill family can grow. |
 | `get-standard --name N` | Read-only artifact-guard primitive (no lock): print `standards[N].path` + exit 0 if registered, else print nothing + exit 1. |
 | `set-status <value> [--force]` | Advance the lifecycle status (gated — see below). On `done`/`rolled-back` it also clears a stale `.migration/.allow-destructive` guard override if one is present. |
-| `set-strategy [--transform] [--rollback] [--parallelism]` | Update strategy fields. |
+| `set-strategy [--transform] [--rollback] [--parallelism] [--link a,b]` | Update strategy fields (`--link` replaces `worktree_link`, the dep dirs symlinked into future wave worktrees). |
 | `add-risk --area --risk --severity --mitigation [--id]` | Append to the risk register. |
 | `set-baseline [--suite-cmd] [--captured true|false] [--characterization a,b] [--force]` | Record baseline (`--captured true` is verified — see below). |
 | `add-wave [--id] [--title] [--risk low\|med\|high] [--gate]` | Add a wave (`--gate` = pause for a human before it). |
 | `add-unit --wave W [--id] [--title] [--paths a,b] [--risk low\|med\|high] [--depends x,y] [--success "text"] [--transform "text"]` | Add a unit (`--transform` overrides `strategy.transform` for this unit only). |
 | `set-wave-status --wave W <value> [--force]` | Set a wave's status (gated — see below). |
-| `set-unit-status --wave W --unit U <value> [--report path]` | Set a unit's status. |
-| `reset-wave --wave W` | Reset the wave and ALL its units to `pending` (re-plan a failed/rolled-back wave; keeps `attempts`). |
+| `set-unit-status --wave W --unit U <value> [--report path] [--force]` | Set a unit's status. A direct flip to `verified` now **requires `--force`** — the sanctioned path is `record --result pass`. Every transition is ledgered. |
+| `reset-wave --wave W [--force]` | Reset the wave and ALL its units to `pending` (re-plan a failed/rolled-back wave; keeps `attempts`). Refuses a `rollback-failed` wave without `--force`. |
 | `checkpoint --wave W [--label] [--paths a,b] [--commit [--no-verify] [--tag]]` | Snapshot the wave's pre-edit files + record HEAD (`--tag` requires `--commit`). |
 | `list-checkpoints` | List recorded checkpoints. |
-| `rollback --wave W [--to cp-id] [--git-reset]` | True scoped revert of the wave to its checkpoint. |
-| `check --wave W` | Run `baseline.suite_cmd` in the repo root; write `.migration/reports/W/_suite.md`; exit code reflects the suite. |
-| `record --wave W --unit U --result pass|fail [--report path] [--note text] [--no-rollback]` | Record verification (fail auto-rolls-back the wave + increments `attempts`). |
+| `worktree-open --wave W` | **(worktree mode)** Create the wave's isolated worktree + branch off the integration tip, symlink deps, snapshot pre-edit files as a backup, record `worktree`/`branch`/`base`. Idempotent / resume-safe; prints the worktree's absolute path. |
+| `worktree-path --wave W` | **(worktree mode)** Read-only (no lock): print the wave's live worktree path, or exit 1 if it has none. |
+| `integrate --wave W [--force] [--no-verify]` | **(worktree mode)** Commit the worktree's changes on its branch, fast-forward the integration branch to it, remove the worktree, delete the wave branch, stamp `integrated`. Requires wave status `verified` unless `--force`; every git step is checked and stops non-zero on failure. |
+| `rollback --wave W [--to cp-id] [--git-reset]` | Worktree-aware: in worktree mode **discards** the wave's worktree + branch (`worktree remove --force` + `branch -D`), leaving the integration branch untouched (sets `rollback-failed` if git refuses). In main-tree mode, a true scoped revert of the wave to its checkpoint. |
+| `check --wave W` | Run `baseline.suite_cmd`; write `.migration/reports/W/_suite.md`; exit code reflects the suite. In worktree mode it runs **inside the wave's worktree** (so it tests the migrated code), else the repo root. |
+| `record --wave W --unit U --result pass|fail [--report path] [--note text] [--no-rollback]` | Record verification (`pass` = unit `verified`; `fail` increments `attempts` + auto-rolls-back the wave — in worktree mode by discarding the worktree/branch). |
 | `ledger "message"` | Append a line to the ledger. |
 
 ### Checkpoint & rollback semantics
+
+This section describes **main-tree** (legacy) mode. In **worktree** mode, `worktree-open` records the
+wave's checkpoint and `rollback` discards the worktree/branch instead — see *Execution models* above.
 
 - `checkpoint --wave W` **auto-derives** its target set from wave `W`'s units' `paths` (union;
   globs are expanded, directories are walked) unless you pass an explicit `--paths a,b`. It snapshots
@@ -205,8 +253,9 @@ The verification gate is enforced by the script, not merely by prose — these c
 (non-zero exit + a clear stderr message) rather than silently advancing past unfinished work:
 
 - `record --wave W --unit U --result fail` marks the unit `failed`, **increments `unit["attempts"]`**,
-  flags the wave as **not advanceable**, and by default **auto-rolls-back the wave** to its checkpoint
-  (pass `--no-rollback` to only mark it failed). `--result pass` marks the unit `verified`.
+  flags the wave as **not advanceable**, and by default **auto-rolls-back the wave** — to its
+  checkpoint in main-tree mode, or by **discarding the worktree + branch** in worktree mode (pass
+  `--no-rollback` to only mark it failed). `--result pass` marks the unit `verified`.
 - `check --wave W` gives verify a **mechanical grounding**: it runs `baseline.suite_cmd` in the repo
   root, writes `.migration/reports/W/_suite.md`, prints `PASS`/`FAIL`, and **exits non-zero if the
   suite failed**. If `suite_cmd` is empty it prints a "no suite configured" notice and exits 0 (never
@@ -215,10 +264,13 @@ The verification gate is enforced by the script, not merely by prose — these c
 - `set-baseline --captured true` refuses unless `suite_cmd` is non-empty **and** every
   `characterization` path exists on disk — so `captured` is a real claim, not a bare flag.
 - `set-status <x>` refuses out-of-order transitions: `executing` needs `baseline.captured` **and a git
-  repo** (rollback is unsafe without git); `documenting` needs the active wave fully verified;
-  `cleaning`/`done` need **every wave `verified`** — a `rolled-back` wave does **not** count, so a
-  failed wave must be `reset-wave`'d and re-done (or the whole migration aborted via `set-status
-  rolled-back`) before completing.
+  repo** (rollback is unsafe without git) — and, in **worktree** mode, the integration branch must
+  exist; `documenting` needs the active wave fully verified; `cleaning`/`done` need **every wave
+  `verified`** — a `rolled-back` / `rollback-failed` wave does **not** count, so a failed wave must be
+  `reset-wave`'d and re-done (or the whole migration aborted via `set-status rolled-back`) before
+  completing. In **worktree** mode every wave must additionally be **`integrated`** (have an
+  `integrated` sha) — a verified wave still living in its worktree must be `integrate`d first, or the
+  final integration branch would be missing that wave's work.
 - `--force` bypasses any of these refusals (including the `captured=true` and git checks) and records
   the override in the ledger. Use it only deliberately.
 
