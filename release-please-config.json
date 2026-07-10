@@ -41,6 +41,17 @@
           "jsonpath": "$.version"
         }
       ]
+    },
+    "plugins/migration-harness": {
+      "component": "migration-harness",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".claude-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
     }
   }
 }

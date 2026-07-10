@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "migration-harness",
+  "version": "0.1.0",
+  "description": "Harness for AI agents to run large-scale code migrations safely: assess and plan in waves, capture a behavioral baseline, transform, verify with adversarial checks, document, and clean up — with git+snapshot checkpoints and rollback.",
+  "author": {
+    "name": "Dyx Benjamin",
+    "email": "bengarr.negocios@gmail.com"
+  },
+  "keywords": [
+    "migration",
+    "refactor",
+    "codemod",
+    "harness",
+    "automation",
+    "verification",
+    "rollback",
+    "agents"
+  ]
+}
