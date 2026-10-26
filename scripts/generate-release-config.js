@@ -5,6 +5,10 @@
  *
  * Source of truth: plugins/<name>/.claude-plugin/plugin.json
  *
+ * A plugin's version lives only in its plugin.json (bumped by Release Please).
+ * Marketplace entries carry no version: Claude Code reads plugin.json, and
+ * `claude plugin validate` warns when both declare one.
+ *
  * This script:
  *   1. Scans plugins/ directory for plugin folders
  *   2. Syncs marketplace.json with discovered plugins
@@ -78,9 +82,9 @@ function syncMarketplace(plugins) {
         existing.description = pj.description || '';
         changes.push('description');
       }
-      if (existing.version !== pj.version) {
-        existing.version = pj.version || '0.1.0';
-        changes.push('version');
+      if ('version' in existing) {
+        delete existing.version;
+        changes.push('version (removed)');
       }
       if (JSON.stringify(existing.keywords) !== JSON.stringify(pj.keywords || [])) {
         existing.keywords = pj.keywords || [];
@@ -97,7 +101,6 @@ function syncMarketplace(plugins) {
         name: pj.name,
         source: `./plugins/${plugin.dirName}`,
         description: pj.description || '',
-        version: pj.version || '0.1.0',
         keywords: pj.keywords || []
       });
       updated = true;
@@ -136,9 +139,7 @@ function generateReleaseConfig(marketplace) {
     const version = existingManifest[pluginPath] || pluginJson.version || '0.1.0';
 
     // Each plugin versions independently. Release Please bumps only its own
-    // plugin.json (paths here are relative to the plugin folder, so it cannot
-    // reach the repo-root marketplace.json). The shared marketplace.json is kept
-    // in sync from plugin.json by syncMarketplace() on every push.
+    // plugin.json, the single place a plugin's version is declared.
     packages[pluginPath] = {
       component: plugin.name,
       'changelog-path': 'CHANGELOG.md',

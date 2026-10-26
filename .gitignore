@@ -21,3 +21,11 @@ Thumbs.db
 
 # AI
 .claude/
+
+# Plugin evals and mods
+plugins/*/evals/results/
+eval-results/
+plugins/*/.claude-plugin/types/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

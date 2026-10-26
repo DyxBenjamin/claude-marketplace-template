@@ -12,11 +12,21 @@
       "name": "base-plugin",
       "source": "./plugins/base-plugin",
       "description": "Example plugin: the skill-creator skill and a sample hook.",
-      "version": "0.1.0",
       "keywords": [
         "base",
         "skills",
         "skill-creator",
+        "starter"
+      ]
+    },
+    {
+      "name": "example-mod",
+      "source": "./plugins/example-mod",
+      "description": "Example mod: counts Claude's tool calls, shows the count beside the spinner, and adds a /tally command.",
+      "keywords": [
+        "mod",
+        "example",
+        "spinner",
         "starter"
       ]
     }

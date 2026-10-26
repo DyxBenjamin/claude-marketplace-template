@@ -28,9 +28,9 @@ jobs:
         uses: actions/checkout@v4
 
       # Runs on every non-bot push (the job-level actor guard prevents the bot's
-      # own sync commit from re-triggering). This must run after Release PR merges
-      # too: Release Please bumps each plugin.json but cannot reach the repo-root
-      # marketplace.json, so syncMarketplace() propagates the new version there.
+      # own sync commit from re-triggering). It adds new plugins to
+      # marketplace.json and the Release Please config, and mirrors description
+      # and keywords from each plugin.json. Versions live only in plugin.json.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:

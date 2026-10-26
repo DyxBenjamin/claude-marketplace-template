@@ -1,0 +1,78 @@
+name: Evals
+
+# Runs each plugin's eval suite (plugins/<name>/evals/) with `claude plugin eval`.
+# Every run calls the model and spends API credit, so this workflow only starts
+# by hand. It needs an ANTHROPIC_API_KEY repository secret.
+on:
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: Plugin directory name under plugins/ (empty = every plugin with evals/)
+        required: false
+        default: ''
+      threshold:
+        description: Minimum score (0-1) every case must reach
+        required: false
+        default: '0.8'
+      max_cost_usd:
+        description: Hard cost ceiling per plugin, in USD
+        required: false
+        default: '5'
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    name: Run plugin evals
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      # Models are pinned so scores stay comparable between runs.
+      - name: Run evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PLUGIN: ${{ inputs.plugin }}
+          THRESHOLD: ${{ inputs.threshold }}
+          MAX_COST_USD: ${{ inputs.max_cost_usd }}
+        run: |
+          set -uo pipefail
+          status=0
+          mkdir -p eval-results
+          for dir in plugins/*/; do
+            name=$(basename "$dir")
+            [ -z "$PLUGIN" ] || [ "$PLUGIN" = "$name" ] || continue
+            [ -d "${dir}evals" ] || continue
+            echo "::group::${name}"
+            claude plugin eval "$dir" \
+              --trust-plugin \
+              --json "eval-results/${name}.json" \
+              --threshold "$THRESHOLD" \
+              --model claude-sonnet-5-5 \
+              --judge-model claude-haiku-5-5 \
+              --max-cost-usd "$MAX_COST_USD" \
+              --no-publish || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: |
+            eval-results/
+            plugins/*/evals/results/
+          if-no-files-found: ignore

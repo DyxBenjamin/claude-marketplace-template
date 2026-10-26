@@ -41,6 +41,17 @@
           "jsonpath": "$.version"
         }
       ]
+    },
+    "plugins/example-mod": {
+      "component": "example-mod",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".claude-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
     }
   }
 }

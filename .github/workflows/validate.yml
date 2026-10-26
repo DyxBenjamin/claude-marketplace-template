@@ -46,3 +46,15 @@ jobs:
             claude plugin validate "$dir" --strict
             echo "::endgroup::"
           done
+
+      # Mods ship *.test.ts files that `claude plugin test` runs offline: no
+      # session, sign-in or network. Plugins without tests are skipped.
+      - name: Test mods
+        run: |
+          set -euo pipefail
+          for dir in plugins/*/; do
+            [ -n "$(find "$dir" -name '*.test.ts' -o -name '*.test.tsx' | head -1)" ] || continue
+            echo "::group::${dir}"
+            (cd "$dir" && claude plugin test)
+            echo "::endgroup::"
+          done

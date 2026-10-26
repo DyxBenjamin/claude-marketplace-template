@@ -1,8 +1,9 @@
 # Claude Marketplace Template
 
-A GitHub template for a Claude Code plugin marketplace. It contains one example
-plugin (`base-plugin`) and a CI pipeline that versions and releases plugins from
-commit messages.
+A GitHub template for a Claude Code plugin marketplace. It contains two example
+plugins (`base-plugin`, a skill with evals and a sample hook; `example-mod`, a
+mod with tests) and a CI pipeline that validates, tests, versions and releases
+plugins from commit messages.
 
 This is a GitHub template, not a fork. Use **Use this template**, replace the
 placeholders, and add your plugins.
@@ -28,6 +29,7 @@ marketplace name is the `name` field in `.claude-plugin/marketplace.json`.
    | --- | --- |
    | `.claude-plugin/marketplace.json` | `name`, `owner.name`, `owner.email` |
    | `plugins/base-plugin/.claude-plugin/plugin.json` | `author.name`, `author.email` |
+   | `plugins/example-mod/.claude-plugin/plugin.json` | `author.name`, `author.email` |
    | `CLAUDE.md` | `plugin.json` template author |
    | `README.md` | install commands |
 
@@ -53,6 +55,42 @@ claude plugin validate ./plugins/base-plugin  # plugin.json + skills/agents/hook
 
 `claude plugin validate` is a local schema check; no account or network needed.
 CI runs it on every push and pull request (`.github/workflows/validate.yml`).
+
+### Mods
+
+A mod is a plugin whose JavaScript or TypeScript hooks module runs inside Claude
+Code: it can draw in the interface, add `/commands` that run without a Claude
+turn, and rewrite tool calls. `example-mod` counts tool calls, shows the count
+beside the spinner, and answers `/tally`:
+
+```sh
+claude --plugin-dir ./plugins/example-mod   # hot-reloads on save
+cd plugins/example-mod && claude plugin test # runs *.test.ts offline
+```
+
+Mods run with the user's permissions and are not sandboxed. `claude plugin
+validate` lists the events a mod handles and the calls it makes; review that
+output before publishing one. CI runs `claude plugin test` for every plugin that
+has `*.test.ts` files. See the
+[mods overview](https://code.claude.com/docs/en/plugins/mods/overview).
+
+### Evals
+
+`claude plugin eval` runs a plugin's eval suite (`plugins/<name>/evals/`): each
+case is a `prompt.md` plus `graders/*.md`, run with and without the plugin so the
+report shows the score delta the plugin adds. `base-plugin` ships two cases: one
+checks that `skill-creator` fires on a matching request and helps, the other
+that it stays silent on an unrelated question.
+
+```sh
+claude plugin eval ./plugins/base-plugin
+```
+
+Every run calls the model and costs API credit. The `Evals` workflow
+(`.github/workflows/evals.yml`) runs only when started by hand from the Actions
+tab, with pinned models, a score threshold and a cost ceiling; it needs an
+`ANTHROPIC_API_KEY` repository secret. Results land in `evals/results/`, which is
+gitignored. See [Test plugins with evals](https://code.claude.com/docs/en/plugin-evals).
 
 ## Enable releases
 
@@ -89,10 +127,14 @@ A small CI script (`scripts/generate-release-config.js`) discovers plugins under
 `plugins/` and keeps `marketplace.json` and the Release Please config in sync
 from each `plugin.json` on every push.
 
+A plugin's version lives only in its `plugin.json`. Marketplace entries carry no
+`version`: Claude Code reads it from `plugin.json`, and declaring it in both
+places makes `claude plugin validate` warn.
+
 These files are updated automatically:
 
 - `plugins/<name>/.claude-plugin/plugin.json` — plugin version
-- `.claude-plugin/marketplace.json` — marketplace plugin entry version
+- `.claude-plugin/marketplace.json` — new plugin entries, descriptions, keywords
 - `plugins/<name>/CHANGELOG.md` — changelog
 
 Two caveats when merging:
@@ -109,9 +151,9 @@ Create only `plugins/<name>/.claude-plugin/plugin.json`. CI discovers it and
 syncs `marketplace.json` and the Release Please config; version bumps are handled
 by Release Please.
 
-A plugin can contain more than the example skill and hook here — subagents
-(`agents/`), MCP servers (`.mcp.json`), LSP servers (`.lsp.json`), background
-monitors, output styles, and more. See [`CLAUDE.md`](CLAUDE.md) for the full
+A plugin can contain more than the examples here — subagents (`agents/`), MCP
+servers (`.mcp.json`), LSP servers (`.lsp.json`), background monitors, output
+styles, and more. See [`CLAUDE.md`](CLAUDE.md) for the full
 component map, or the
 [Plugins reference](https://code.claude.com/docs/en/plugins-reference).
 
@@ -123,17 +165,28 @@ component map, or the
 │   └── marketplace.json
 ├── .github/
 │   └── workflows/
+│       ├── evals.yml           # claude plugin eval, manual trigger only
 │       ├── release.yml         # sync config + Release Please
-│       └── validate.yml        # claude plugin validate on push/PR
+│       └── validate.yml        # validate + mod tests on push/PR
 ├── plugins/
-│   └── base-plugin/
+│   ├── base-plugin/
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   ├── evals/              # eval cases for skill-creator
+│   │   ├── hooks/
+│   │   │   ├── hooks.json      # sample hook — replace or delete
+│   │   │   └── example-guard.sh
+│   │   ├── skills/
+│   │   │   └── skill-creator/  # Anthropic's skill, Apache-2.0
+│   │   └── README.md
+│   └── example-mod/
 │       ├── .claude-plugin/
 │       │   └── plugin.json
 │       ├── hooks/
-│       │   ├── hooks.json      # sample hook — replace or delete
-│       │   └── example-guard.sh
-│       ├── skills/
-│       │   └── skill-creator/  # Anthropic's skill, Apache-2.0
+│       │   ├── hooks.json      # points to the hooks module
+│       │   └── register.js     # the mod's code
+│       ├── tests/
+│       │   └── example-mod.test.ts
 │       └── README.md
 ├── scripts/
 │   └── generate-release-config.js
