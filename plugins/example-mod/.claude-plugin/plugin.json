@@ -1,7 +1,7 @@
 {
 	"$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
 	"name": "example-mod",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Example mod: counts Claude's tool calls, shows the count beside the spinner, and adds a /tally command.",
 	"author": {
 		"name": "CHANGE_ME",
