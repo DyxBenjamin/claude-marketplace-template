@@ -52,7 +52,7 @@ root** (not inside `.claude-plugin/`) and is auto-discovered:
 | Output styles / Themes | `output-styles/`, `themes/` | Response styling and `/theme` presets |
 | Executables | `bin/` | Binaries added to the Bash tool's `PATH` |
 | Plugin defaults | `settings.json` | `agent` / `subagentStatusLine` defaults when enabled |
-| Mods | `hooks/hooks.json` `modules` + an ES module exporting `register(on, options)` | In-process JS/TS hooks: draw panes and bands, add `/commands`, rewrite tool calls (see `plugins/example-mod`) |
+| Mods | `hooks/hooks.json` `modules` + an ES module exporting `register(on, options)` | In-process TypeScript hooks: draw panes and bands, add `/commands`, rewrite tool calls (see `plugins/example-mod`) |
 | Mod tests | `**/*.test.ts` | Offline tests run by `claude plugin test` (CI runs them) |
 | Evals | `evals/<case>/prompt.md` + `graders/*.md` | Scored cases run by `claude plugin eval`, with a no-plugin baseline (see `plugins/base-plugin/evals`) |
 
@@ -61,10 +61,17 @@ time, e.g. API tokens), `dependencies` (other plugins, with semver ranges),
 `defaultEnabled`, `displayName`, `license`, `homepage`, `repository`.
 
 Reference scripts and configs with `${CLAUDE_PLUGIN_ROOT}` (plugin install dir)
-or `${CLAUDE_PLUGIN_DATA}` (persistent state across updates) — never absolute or
+or `${CLAUDE_PLUGIN_DATA}` (dependencies and caches that belong to no project) — never absolute or
 `../` paths, which break once the plugin is copied to the cache.
 
 Full schemas: <https://code.claude.com/docs/en/plugins-reference>.
+
+## Code
+
+All code is TypeScript that Node 24 runs directly; `npm ci` installs the toolchain. A `.sh` file only wraps a
+`.ts` file in at most 5 lines, and zod validates every input and output. The rules are in
+`.claude/skills/review-marketplace/rules.md`; `npm run typecheck`, `node scripts/vendor-zod.ts --check` and
+`.claude/skills/review-marketplace/review.sh` check them.
 
 ## Commit Convention
 

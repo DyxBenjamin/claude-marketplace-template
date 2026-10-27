@@ -34,10 +34,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Generate Release Config
-        run: node scripts/generate-release-config.js
+        run: node scripts/generate-release-config.ts
 
       - name: Commit config changes
         run: |

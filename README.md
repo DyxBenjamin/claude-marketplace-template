@@ -1,3 +1,9 @@
+---
+summary: Explains setup, local testing, mods, evals and Release Please releases for the plugin marketplace template.
+tags: [marketplace, release-please, ci, mod, evals]
+related: [CLAUDE.md, .claude-plugin/marketplace.json, scripts/generate-release-config.ts]
+---
+
 # Claude Marketplace Template
 
 A GitHub template for a Claude Code plugin marketplace. It contains two example
@@ -23,7 +29,8 @@ marketplace name is the `name` field in `.claude-plugin/marketplace.json`.
 ## Setup
 
 1. Create a repository from this template.
-2. Replace every `CHANGE_ME` (search the repo). They live here:
+2. Run `npm ci` (Node 24 or later); it installs the TypeScript toolchain the scripts use.
+3. Replace every `CHANGE_ME` (search the repo). They live here:
 
    | File | Field |
    | --- | --- |
@@ -56,9 +63,12 @@ claude plugin validate ./plugins/base-plugin  # plugin.json + skills/agents/hook
 `claude plugin validate` is a local schema check; no account or network needed.
 CI runs it on every push and pull request (`.github/workflows/validate.yml`).
 
+`npm run typecheck` type-checks all TypeScript, and `.claude/skills/review-marketplace/review.sh` runs every CI
+check locally.
+
 ### Mods
 
-A mod is a plugin whose JavaScript or TypeScript hooks module runs inside Claude
+A mod is a plugin whose TypeScript hooks module runs inside Claude
 Code: it can draw in the interface, add `/commands` that run without a Claude
 turn, and rewrite tool calls. `example-mod` counts tool calls, shows the count
 beside the spinner, and answers `/tally`:
@@ -123,7 +133,7 @@ On a commit to `main`, CI syncs `marketplace.json` and opens a release PR.
 Merging that PR publishes a tagged GitHub Release, bumps the version, and writes
 the changelog. Each plugin versions independently.
 
-A small CI script (`scripts/generate-release-config.js`) discovers plugins under
+A small CI script (`scripts/generate-release-config.ts`) discovers plugins under
 `plugins/` and keeps `marketplace.json` and the Release Please config in sync
 from each `plugin.json` on every push.
 
@@ -167,7 +177,7 @@ component map, or the
 │   └── workflows/
 │       ├── evals.yml           # claude plugin eval, manual trigger only
 │       ├── release.yml         # sync config + Release Please
-│       └── validate.yml        # validate + mod tests on push/PR
+│       └── validate.yml        # validate + typecheck + mod tests on push/PR
 ├── plugins/
 │   ├── base-plugin/
 │   │   ├── .claude-plugin/
@@ -175,7 +185,7 @@ component map, or the
 │   │   ├── evals/              # eval cases for skill-creator
 │   │   ├── hooks/
 │   │   │   ├── hooks.json      # sample hook — replace or delete
-│   │   │   └── example-guard.sh
+│   │   │   └── example-guard.ts
 │   │   ├── skills/
 │   │   │   └── skill-creator/  # Anthropic's skill, Apache-2.0
 │   │   └── README.md
@@ -184,12 +194,15 @@ component map, or the
 │       │   └── plugin.json
 │       ├── hooks/
 │       │   ├── hooks.json      # points to the hooks module
-│       │   └── register.js     # the mod's code
+│       │   └── register.ts     # the mod's code
 │       ├── tests/
 │       │   └── example-mod.test.ts
 │       └── README.md
 ├── scripts/
-│   └── generate-release-config.js
+│   ├── generate-release-config.ts
+│   └── vendor-zod.ts
+├── package.json
+├── tsconfig.json
 ├── release-please-config.json
 ├── .release-please-manifest.json
 ├── CLAUDE.md
