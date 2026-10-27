@@ -22,7 +22,16 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Check vendored zod
+        run: node scripts/vendor-zod.ts --check
 
       # The CLI ships `claude plugin validate`, a local schema/syntax check.
       # It needs no authentication - it never calls the API.
@@ -44,5 +53,17 @@ jobs:
             [ -f "${dir}.claude-plugin/plugin.json" ] || continue
             echo "::group::${dir}"
             claude plugin validate "$dir" --strict
+            echo "::endgroup::"
+          done
+
+      # Mods ship *.test.ts files that `claude plugin test` runs offline: no
+      # session, sign-in or network. Plugins without tests are skipped.
+      - name: Test mods
+        run: |
+          set -euo pipefail
+          for dir in plugins/*/; do
+            [ -n "$(find "$dir" -name '*.test.ts' -o -name '*.test.tsx' | head -1)" ] || continue
+            echo "::group::${dir}"
+            (cd "$dir" && claude plugin test)
             echo "::endgroup::"
           done

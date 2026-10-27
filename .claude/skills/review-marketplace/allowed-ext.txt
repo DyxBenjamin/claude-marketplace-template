@@ -1,0 +1,24 @@
+# File types the repository's code and plugins may hold: one extension (".sh") or exact file name ("LICENSE")
+# per line. check-rules.ts fails any other file, a .js file other than vendor/zod.generated.js, and a .sh file
+# longer than a wrapper. Docs and config
+.md
+.json
+.yml
+.yaml
+.txt
+LICENSE
+NOTICE
+.gitignore
+# Code: TypeScript
+.ts
+.tsx
+.mts
+# Generated vendor bundle and wrappers
+.js
+.sh
+# Assets: static pages a script serves or fills in (their scripts are browser JavaScript)
+.html
+.png
+.svg
+.wav
+.mp3

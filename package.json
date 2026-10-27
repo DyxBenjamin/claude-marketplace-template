@@ -1,0 +1,22 @@
+{
+  "name": "claude-marketplace",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "vendor": "node scripts/vendor-zod.ts",
+    "typecheck": "tsc -p .",
+    "sync": "node scripts/generate-release-config.ts",
+    "review": ".claude/skills/review-marketplace/review.sh"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,9 +1,17 @@
-#!/usr/bin/env node
+/**
+ * @file Syncs marketplace.json with each plugin's plugin.json and generates the release-please config and manifest.
+ * @tags ci, marketplace, release-please
+ * @related .claude-plugin/marketplace.json, release-please-config.json, .github/workflows/release.yml
+ */
 
 /**
  * Syncs marketplace.json and generates release-please configuration.
  *
  * Source of truth: plugins/<name>/.claude-plugin/plugin.json
+ *
+ * A plugin's version lives only in its plugin.json (bumped by Release Please).
+ * Marketplace entries carry no version: Claude Code reads plugin.json, and
+ * `claude plugin validate` warns when both declare one.
  *
  * This script:
  *   1. Scans plugins/ directory for plugin folders
@@ -16,17 +24,69 @@
  * The rest is automated.
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'node:fs';
+import path from 'node:path';
+import { z } from 'zod';
 
-const ROOT = path.resolve(__dirname, '..');
+const ROOT = path.resolve(import.meta.dirname, '..');
 const PLUGINS_DIR = path.join(ROOT, 'plugins');
 const MARKETPLACE_PATH = path.join(ROOT, '.claude-plugin', 'marketplace.json');
 const CONFIG_PATH = path.join(ROOT, 'release-please-config.json');
 const MANIFEST_PATH = path.join(ROOT, '.release-please-manifest.json');
 
-function discoverPlugins() {
-  const plugins = [];
+const PluginJson = z.looseObject({
+  name: z.string(),
+  version: z.string().optional(),
+  description: z.string().optional(),
+  keywords: z.array(z.string()).optional(),
+});
+
+const MarketplaceEntry = z.looseObject({
+  name: z.string(),
+  source: z.unknown(),
+  description: z.string().optional(),
+  keywords: z.array(z.string()).optional(),
+});
+
+const Marketplace = z.looseObject({ plugins: z.array(MarketplaceEntry) });
+
+const Manifest = z.record(z.string(), z.string());
+
+const ReleaseConfig = z.object({
+  $schema: z.string(),
+  'release-type': z.string(),
+  'bump-minor-pre-major': z.boolean(),
+  'bump-patch-for-minor-pre-major': z.boolean(),
+  'include-component-in-tag': z.boolean(),
+  'include-v-in-tag': z.boolean(),
+  'pull-request-title-pattern': z.string(),
+  'separate-pull-requests': z.boolean(),
+  'changelog-sections': z.array(
+    z.object({ type: z.string(), section: z.string(), hidden: z.boolean().optional() }),
+  ),
+  packages: z.record(
+    z.string(),
+    z.object({
+      component: z.string(),
+      'changelog-path': z.string(),
+      'extra-files': z.array(z.object({ type: z.string(), path: z.string(), jsonpath: z.string() })),
+    }),
+  ),
+});
+
+type PluginJson = z.infer<typeof PluginJson>;
+type Marketplace = z.infer<typeof Marketplace>;
+
+function readJson<T extends z.ZodType>(file: string, schema: T): z.infer<T> {
+  return schema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+}
+
+function writeJson(file: string, data: unknown): void {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
+}
+
+function discoverPlugins(): { dirName: string; json: PluginJson }[] {
+  const plugins: { dirName: string; json: PluginJson }[] = [];
 
   if (!fs.existsSync(PLUGINS_DIR)) {
     return plugins;
@@ -44,30 +104,32 @@ function discoverPlugins() {
       continue;
     }
 
-    const pluginJson = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf8'));
     plugins.push({
       dirName: entry.name,
-      json: pluginJson
+      json: readJson(pluginJsonPath, PluginJson),
     });
   }
 
   return plugins;
 }
 
-function syncMarketplace(plugins) {
-  const marketplace = JSON.parse(fs.readFileSync(MARKETPLACE_PATH, 'utf8'));
+function syncMarketplace(plugins: { dirName: string; json: PluginJson }[]): Marketplace {
+  // Validated, then kept as read: parsing reorders keys and the file keeps its own order.
+  const raw: unknown = JSON.parse(fs.readFileSync(MARKETPLACE_PATH, 'utf8'));
+  Marketplace.parse(raw);
+  const marketplace = raw as Marketplace;
   const existingByName = new Map(marketplace.plugins.map((p, i) => [p.name, i]));
   let updated = false;
 
   for (const plugin of plugins) {
     const pj = plugin.json;
+    const idx = existingByName.get(pj.name);
 
-    if (existingByName.has(pj.name)) {
+    if (idx !== undefined) {
       // Update existing plugin - sync all fields
-      const idx = existingByName.get(pj.name);
       const existing = marketplace.plugins[idx];
 
-      const changes = [];
+      const changes: string[] = [];
 
       // Sync all fields from plugin.json
       if (existing.source !== `./plugins/${plugin.dirName}`) {
@@ -78,9 +140,9 @@ function syncMarketplace(plugins) {
         existing.description = pj.description || '';
         changes.push('description');
       }
-      if (existing.version !== pj.version) {
-        existing.version = pj.version || '0.1.0';
-        changes.push('version');
+      if ('version' in existing) {
+        delete existing.version;
+        changes.push('version (removed)');
       }
       if (JSON.stringify(existing.keywords) !== JSON.stringify(pj.keywords || [])) {
         existing.keywords = pj.keywords || [];
@@ -97,8 +159,7 @@ function syncMarketplace(plugins) {
         name: pj.name,
         source: `./plugins/${plugin.dirName}`,
         description: pj.description || '',
-        version: pj.version || '0.1.0',
-        keywords: pj.keywords || []
+        keywords: pj.keywords || [],
       });
       updated = true;
       console.log(`Added new plugin: ${pj.name}`);
@@ -106,24 +167,22 @@ function syncMarketplace(plugins) {
   }
 
   if (updated) {
-    fs.writeFileSync(MARKETPLACE_PATH, JSON.stringify(marketplace, null, 2) + '\n');
+    Marketplace.parse(marketplace);
+    writeJson(MARKETPLACE_PATH, marketplace);
     console.log('Updated .claude-plugin/marketplace.json');
   }
 
   return marketplace;
 }
 
-function generateReleaseConfig(marketplace) {
+function generateReleaseConfig(marketplace: Marketplace): void {
   // Read existing manifest to preserve versions
-  let existingManifest = {};
-  if (fs.existsSync(MANIFEST_PATH)) {
-    existingManifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
-  }
+  const existingManifest = fs.existsSync(MANIFEST_PATH) ? readJson(MANIFEST_PATH, Manifest) : {};
 
-  const packages = {};
-  const manifest = {};
+  const packages: z.infer<typeof ReleaseConfig>['packages'] = {};
+  const manifest: Record<string, string> = {};
 
-  marketplace.plugins.forEach((plugin, index) => {
+  marketplace.plugins.forEach((plugin) => {
     const pluginPath = `plugins/${plugin.name}`;
     const pluginJsonPath = path.join(ROOT, pluginPath, '.claude-plugin', 'plugin.json');
 
@@ -132,13 +191,11 @@ function generateReleaseConfig(marketplace) {
       return;
     }
 
-    const pluginJson = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf8'));
+    const pluginJson = readJson(pluginJsonPath, PluginJson);
     const version = existingManifest[pluginPath] || pluginJson.version || '0.1.0';
 
     // Each plugin versions independently. Release Please bumps only its own
-    // plugin.json (paths here are relative to the plugin folder, so it cannot
-    // reach the repo-root marketplace.json). The shared marketplace.json is kept
-    // in sync from plugin.json by syncMarketplace() on every push.
+    // plugin.json, the single place a plugin's version is declared.
     packages[pluginPath] = {
       component: plugin.name,
       'changelog-path': 'CHANGELOG.md',
@@ -146,16 +203,16 @@ function generateReleaseConfig(marketplace) {
         {
           type: 'json',
           path: '.claude-plugin/plugin.json',
-          jsonpath: '$.version'
-        }
-      ]
+          jsonpath: '$.version',
+        },
+      ],
     };
 
     manifest[pluginPath] = version;
   });
 
-  const config = {
-    '$schema': 'https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json',
+  const config = ReleaseConfig.parse({
+    $schema: 'https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json',
     'release-type': 'simple',
     'bump-minor-pre-major': false,
     'bump-patch-for-minor-pre-major': false,
@@ -168,19 +225,19 @@ function generateReleaseConfig(marketplace) {
       { type: 'fix', section: 'Bug Fixes' },
       { type: 'perf', section: 'Performance' },
       { type: 'docs', section: 'Documentation' },
-      { type: 'chore', section: 'Maintenance', hidden: true }
+      { type: 'chore', section: 'Maintenance', hidden: true },
     ],
-    packages
-  };
+    packages,
+  });
 
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
-  fs.writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n');
+  writeJson(CONFIG_PATH, config);
+  writeJson(MANIFEST_PATH, Manifest.parse(manifest));
 
   console.log(`Generated release-please-config.json with ${Object.keys(packages).length} package(s)`);
   console.log(`Updated .release-please-manifest.json`);
 }
 
-function main() {
+function main(): void {
   const plugins = discoverPlugins();
   console.log(`Discovered ${plugins.length} plugin(s) in plugins/`);
 
