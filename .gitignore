@@ -22,6 +22,7 @@ Thumbs.db
 # AI: local Claude Code state stays out; project skills are versioned
 .claude/*
 !.claude/skills/
+!.claude/agents/
 
 # Plugin evals and mods
 plugins/*/evals/results/

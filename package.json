@@ -7,6 +7,7 @@
   },
   "scripts": {
     "vendor": "node scripts/vendor-zod.ts",
+    "stamp": "node scripts/stamp-delegation.ts",
     "typecheck": "tsc -p .",
     "sync": "node scripts/generate-release-config.ts",
     "review": ".claude/skills/review-marketplace/review.sh"

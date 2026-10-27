@@ -1,6 +1,6 @@
 ---
-description: A request to turn a repeated checklist into a skill fires skill-creator and produces a usable SKILL.md draft or targeted intake questions.
-tags: [skill-creator, trigger]
+description: A request to turn a repeated checklist into a skill fires new-skill or write-skill and produces a usable SKILL.md draft or targeted intake questions.
+tags: [new-skill, write-skill, trigger]
 max_turns: 15
 allowed_tools: [Read, Glob, Grep, Skill]
 ---

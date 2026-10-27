@@ -73,6 +73,13 @@ All code is TypeScript that Node 24 runs directly; `npm ci` installs the toolcha
 `.claude/skills/review-marketplace/rules.md`; `npm run typecheck`, `node scripts/vendor-zod.ts --check` and
 `.claude/skills/review-marketplace/review.sh` check them.
 
+## Skills and Agents
+
+A skill has one objective and a short atomic plan, and runs its steps through the `delegate.md` beside its
+`SKILL.md`: the main thread splits, decides and verifies, and the unit's `builder` agent edits and runs code.
+`npm run stamp` writes `delegate.md` into every skill and `agents/builder.md` into every unit that holds a skill,
+from `templates/`; neither is edited by hand. The skill and agent rules are in `rules.md`.
+
 ## Commit Convention
 
 Use conventional commits for automatic versioning:

@@ -1,6 +1,6 @@
 ---
-description: An unrelated coding question must not fire skill-creator.
-tags: [skill-creator, precision]
+description: An unrelated coding question must not fire any skill-authoring skill (new-skill, write-skill, test-skill, fix-description, ship-skill).
+tags: [new-skill, write-skill, precision]
 runs: 2
 max_turns: 5
 allowed_tools: [Read, Glob, Grep, Skill]
