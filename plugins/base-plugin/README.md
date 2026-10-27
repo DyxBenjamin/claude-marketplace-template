@@ -1,3 +1,9 @@
+---
+summary: Describes base-plugin's skill-creator skill, its eval cases and sample PreToolUse hook, and how to adapt them.
+tags: [skill-creator, evals, hook, plugin-components]
+related: [plugins/base-plugin/.claude-plugin/plugin.json, plugins/base-plugin/hooks/example-guard.ts, plugins/base-plugin/hooks/hooks.json]
+---
+
 # base-plugin
 
 Example plugin for the marketplace. It contains one working skill
@@ -12,7 +18,7 @@ base-plugin/
 │   └── no-trigger/          # skill-creator stays silent on an unrelated question
 ├── hooks/
 │   ├── hooks.json           # sample hook wiring (replace or delete)
-│   └── example-guard.sh     # sample no-op PreToolUse hook (replace or delete)
+│   └── example-guard.ts     # sample no-op PreToolUse hook (replace or delete)
 └── skills/
     └── skill-creator/       # scaffolds new skills (Anthropic, Apache-2.0)
 ```
@@ -23,9 +29,11 @@ base-plugin/
 - **Evals (`evals/`)** — two cases for `claude plugin eval ./plugins/base-plugin`.
   Each has a `prompt.md` (the user request and run limits) and `graders/*.md`
   (how the run is scored). Runs call the model and cost API credit.
-- **Hook (`hooks.json` + `example-guard.sh`)** — a no-op `PreToolUse` hook that
-  allows everything. Add real rules or delete the `hooks/` directory and its
-  wiring.
+- **Hook (`hooks.json` + `example-guard.ts`)** — a no-op `PreToolUse` hook that
+  allows everything. `hooks.json` runs it with `node` (24 or later); it parses
+  the event on stdin with the vendored zod (`vendor/zod.generated.js`) and exits
+  0 (allow) or 2 (block, reason on stderr). Add real rules or delete the
+  `hooks/` directory and its wiring.
 
 A plugin only needs `.claude-plugin/plugin.json`. Keep the parts you use and
 delete the rest.
