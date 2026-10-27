@@ -1,7 +1,7 @@
 ---
 summary: Documents example-mod, a tool-call counter mod with a spinner suffix and /tally command, and how to run and test it
 tags: [mod, hooks, slash-command, spinner-ui]
-related: [plugins/example-mod/hooks/register.js, plugins/example-mod/tests/example-mod.test.ts]
+related: [plugins/example-mod/hooks/register.ts, plugins/example-mod/tests/example-mod.test.ts]
 ---
 
 # example-mod
@@ -15,8 +15,8 @@ example-mod/
 ├── .claude-plugin/
 │   └── plugin.json          # plugin metadata; mods add no required fields
 ├── hooks/
-│   ├── hooks.json           # "modules": ["./register.js"] makes this a mod
-│   └── register.js          # the hooks module: exports register(on)
+│   ├── hooks.json           # "modules": ["./register.ts"] makes this a mod
+│   └── register.ts          # the hooks module: exports register
 └── tests/
     └── example-mod.test.ts  # offline tests for `claude plugin test`
 ```
@@ -28,7 +28,7 @@ claude --plugin-dir ./plugins/example-mod
 ```
 
 Ask Claude for something that takes a few tool calls, then type `/tally`. Edits to
-`register.js` hot-reload in the open session, which resets the count to zero.
+`register.ts` hot-reload in the open session, which resets the count to zero.
 
 ## Test it
 
