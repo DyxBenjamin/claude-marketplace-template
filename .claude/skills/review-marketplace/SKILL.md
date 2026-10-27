@@ -11,6 +11,8 @@ when_to_use: 'Use when "valida el marketplace", "revisa antes de pushear", "corr
 
 Objective: a verdict, `ok` or the list of failures with the fix for each, from `review.sh`.
 
+Claude runs the Steps as `delegate.md` says.
+
 ## Steps
 1. Run `.claude/skills/review-marketplace/review.sh` from the repo root. The script decides; Claude reports its
    `FAIL` and `WARN` lines and never re-derives them by hand. It works on a temporary copy, so the working tree

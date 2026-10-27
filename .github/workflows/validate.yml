@@ -33,6 +33,9 @@ jobs:
       - name: Check vendored zod
         run: node scripts/vendor-zod.ts --check
 
+      - name: Check stamped delegation files
+        run: node scripts/stamp-delegation.ts --check
+
       # The CLI ships `claude plugin validate`, a local schema/syntax check.
       # It needs no authentication - it never calls the API.
       - name: Install Claude Code CLI

@@ -11,6 +11,8 @@ argument-hint: '<plugin> [skill-or-agent]'
 Objective: `plugins/<plugin>/evals/` holds a should-fire case and a should-not-fire case for the target, and a
 smoke run of them exits 0 with no load error.
 
+Claude runs the Steps as `delegate.md` says.
+
 ## Steps
 1. Read the target's `SKILL.md` or agent file and the plugin's existing `evals/` (`base-plugin/evals/` is a
    working reference). Each case is `evals/<case>/prompt.md` plus `evals/<case>/graders/<grader>.md`.

@@ -1,14 +1,16 @@
 /**
- * @file Checks plugins, repository code and the catalog against the mechanical rules.md checks and prints a FAIL line per violation
+ * @file Checks plugins, repository code and the catalog against the mechanical rules.md rules; prints FAIL lines
  * @tags validation, marketplace, ci
  * @related .claude/skills/review-marketplace/rules.md, .claude/skills/review-marketplace/allowed-ext.txt, .claude/skills/review-marketplace/review.ts
  */
 // Usage: check-rules.ts [repo root] [plugin dir...]. Checks the mechanical rules of rules.md on each plugin
 // (all of plugins/ when none is named) and on the catalog; with no plugin named it also checks the technology
-// rules on scripts/ and .claude/skills/. Prints "FAIL <check>: <file>: <detail>" per violation; exits 1 on any.
+// rules on scripts/ and .claude/skills/, and the skill and agent rules on .claude/skills/ and .claude/agents/.
+// Prints "FAIL <check>: <file>: <detail>" per violation; exits 1 on any.
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { checkAgent, checkSkillDir, loadVerbs } from './check-skills.ts';
 
 const Args = z.object({ root: z.string().default('.'), named: z.array(z.string()) });
 const PluginManifest = z.looseObject({ license: z.unknown().optional() });
@@ -38,6 +40,7 @@ const allowed = fs
   .split('\n')
   .map((l) => l.trim())
   .filter((l) => l && !l.startsWith('#'));
+const verbs = loadVerbs(path.join(here, 'verbs.txt'));
 const SKIP_DIRS = new Set(['node_modules', '.git', 'results']);
 const CODE = /\.(sh|js|mjs|cjs|ts|tsx|mts)$/;
 const CONFIG = /\.(json|ya?ml)$/;
@@ -132,10 +135,18 @@ function checkPlugin(dir: string): void {
       const loud = lines.find((l) => SHOUTING.test(l));
       if (loud) fail('tone', file, `all-caps urgency: ${loud.trim().slice(0, 80)}`);
     }
-    if (isMd && /^agents\//.test(rel) && !/^tools:/m.test(front)) fail('tools', file, 'agent declares no tools');
+    if (isMd && /^agents\//.test(rel)) checkAgent(file, fail);
     const grant = front.match(/^allowed-tools:\s*(.*)$/m);
     if (grant && /(^|[\s,'"[])(Bash|\*)(?=$|[\s,'"\]])/.test(grant[1])) fail('tools', file, 'unscoped allowed-tools grant');
     if (base === 'hooks.json') checkHooks(file, text);
+  }
+  checkSkills(path.join(dir, 'skills'));
+}
+
+function checkSkills(dir: string): void {
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) checkSkillDir(path.join(dir, entry.name), verbs, fail);
   }
 }
 
@@ -161,5 +172,8 @@ if (!args.named.length) {
     const dir = path.join(root, tree);
     if (fs.existsSync(dir)) for (const file of walk(dir)) checkTech(file);
   }
+  checkSkills(path.join(root, '.claude', 'skills'));
+  const agents = path.join(root, '.claude', 'agents');
+  if (fs.existsSync(agents)) for (const file of walk(agents)) if (file.endsWith('.md')) checkAgent(file, fail);
 }
 process.exit(fails ? 1 : 0);

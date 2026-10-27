@@ -11,6 +11,8 @@ argument-hint: '[plugin] [patch|minor|major]'
 Objective: the changes are committed on a non-default branch with a conventional subject per plugin, and an open
 pull request into `main` carries the same conventional title.
 
+Claude runs the Steps as `delegate.md` says.
+
 ## Steps
 1. Run `.claude/skills/review-marketplace/review.sh`; any `FAIL` stops here and goes to `review-marketplace`.
 2. Group the changed files (`git status --short`, or `git diff --name-only main...` on a branch) by plugin folder.

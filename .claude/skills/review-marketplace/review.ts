@@ -103,11 +103,13 @@ const rules = spawnSync('node', [path.join(here, 'check-rules.ts'), root], { enc
 process.stdout.write(rules.stdout);
 if (rules.status !== 0) fails++;
 
-// Typecheck and vendored zod copies.
+// Typecheck, vendored zod copies and stamped delegation files.
 const types = run(['npx', '--no-install', 'tsc', '-p', '.']);
 if (!types.ok) fail('typecheck', firstMatch(types.out, /error/) || types.out.trim().split('\n')[0]);
 const vendor = run(['node', 'scripts/vendor-zod.ts', '--check']);
 if (!vendor.ok) fail('vendor', vendor.out.trim().split('\n')[0]);
+const stamp = run(['node', 'scripts/stamp-delegation.ts', '--check']);
+if (!stamp.ok) fail('stamp', stamp.out.trim().split('\n')[0]);
 
 // Versions live only in plugin.json.
 const versioned = catalog.plugins.filter((p) => 'version' in p);

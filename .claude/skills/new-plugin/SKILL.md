@@ -11,6 +11,8 @@ argument-hint: '<plugin-name> [what it does]'
 
 Objective: `plugins/<name>/` exists, `marketplace.json` lists it, and both validate under `--strict`.
 
+Claude runs the Steps as `delegate.md` says.
+
 ## Steps
 1. Settle the name: kebab-case, no spaces, `@`, `:` or `/`, not starting with `cc-plugin-` (reserved for built-in
    mods), and unused under `plugins/` and in `.claude-plugin/marketplace.json`. The folder name equals the plugin

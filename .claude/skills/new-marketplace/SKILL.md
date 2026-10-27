@@ -10,6 +10,8 @@ argument-hint: '[marketplace-name] [owner/repo]'
 
 Objective: no `CHANGE_ME` left outside `.claude/skills/`, and `claude plugin validate . --strict` passes.
 
+Claude runs the Steps as `delegate.md` says.
+
 ## Steps
 1. List the placeholders: `git grep -n CHANGE_ME -- ':!.claude/skills'`.
 2. Prefill the answers from `$ARGUMENTS`, `git config user.name`, `git config user.email` and

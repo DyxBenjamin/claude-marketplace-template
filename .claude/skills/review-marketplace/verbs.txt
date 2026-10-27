@@ -1,0 +1,32 @@
+# verb	effect	produces
+find	read	where it is: paths
+explain	read	how it works: an explanation
+review	read	whether it is right: a verdict
+plan	read	what to do: steps or a roadmap
+pick	read	which option fits: a named choice
+new	code	new files
+fix	code	corrected behavior
+clean	code	a refactor with no behavior change
+move	code	relocated files and updated references
+remove	code	deleted code and its callers
+test	code	added or run tests
+apply	code	a design pattern applied to existing code
+cache	code	cached data with its invalidation
+compose	code	components recombined through composition
+design	code	a rewritten API surface
+extract	code	code pulled into its own unit
+inject	code	dependencies passed in instead of built inside
+place	code	state moved to its owner
+reduce	code	less state or code for the same behavior
+scope	code	a dependency narrowed to a subtree
+split	code	one unit divided into several
+style	code	styling variants
+sync	code	state kept in step with an external source
+use	code	code moved onto a platform feature
+validate	code	inputs parsed against a schema
+write	prose	docs, reports, messages
+ship	git	merges, pull requests, releases
+mode	session	a session-wide behavior
+capture	assist	a task registered in the tracker
+schedule	assist	calendar events created
+track	assist	work logged against a plan
