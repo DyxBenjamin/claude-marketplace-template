@@ -52,7 +52,7 @@ Load the plugin from disk without installing it:
 claude --plugin-dir ./plugins/base-plugin
 ```
 
-Run `/base-plugin:skill-creator` to confirm the skill loads, and
+Run `/base-plugin:new-skill` to confirm the skills load, and
 `/reload-plugins` to pick up edits without restarting. Validate the manifests:
 
 ```sh
@@ -89,7 +89,7 @@ has `*.test.ts` files. See the
 `claude plugin eval` runs a plugin's eval suite (`plugins/<name>/evals/`): each
 case is a `prompt.md` plus `graders/*.md`, run with and without the plugin so the
 report shows the score delta the plugin adds. `base-plugin` ships two cases: one
-checks that `skill-creator` fires on a matching request and helps, the other
+checks that the skill-authoring skills fire on a matching request and helps, the other
 that it stays silent on an unrelated question.
 
 ```sh
@@ -182,12 +182,14 @@ component map, or the
 │   ├── base-plugin/
 │   │   ├── .claude-plugin/
 │   │   │   └── plugin.json
-│   │   ├── evals/              # eval cases for skill-creator
+│   │   ├── agents/             # builder, grader, comparator, analyzer
+│   │   ├── evals/              # eval cases for the skill-authoring skills
 │   │   ├── hooks/
 │   │   │   ├── hooks.json      # sample hook — replace or delete
 │   │   │   └── example-guard.ts
-│   │   ├── skills/
-│   │   │   └── skill-creator/  # Anthropic's skill, Apache-2.0
+│   │   ├── scripts/            # shared skill-authoring scripts, eval-viewer/, assets/
+│   │   ├── skills/             # new-skill, write-skill, test-skill, fix-description,
+│   │   │                       # ship-skill: each with its stamped delegate.md
 │   │   └── README.md
 │   └── example-mod/
 │       ├── .claude-plugin/
@@ -200,7 +202,11 @@ component map, or the
 │       └── README.md
 ├── scripts/
 │   ├── generate-release-config.ts
+│   ├── stamp-delegation.ts     # copies templates/ into every skill and unit
 │   └── vendor-zod.ts
+├── templates/
+│   ├── builder.md              # the builder agent every unit with skills holds
+│   └── delegate.md             # the delegation protocol every skill holds
 ├── package.json
 ├── tsconfig.json
 ├── release-please-config.json
@@ -213,9 +219,12 @@ component map, or the
 
 The Unlicense (public domain). See `LICENSE`.
 
-Exception: `plugins/base-plugin/skills/skill-creator/` is Anthropic's skill,
-under the Apache License 2.0 (terms in that folder's `LICENSE.txt`). Only that
-skill is Apache-2.0; everything else, including skills you add, is covered by The
-Unlicense.
+Exception: in `plugins/base-plugin/`, the skills `new-skill`, `write-skill`,
+`test-skill`, `fix-description` and `ship-skill`, the agents `grader`,
+`comparator` and `analyzer`, and `eval-viewer/`, `assets/` and `scripts/` (except
+`check_skill.ts`, `check-skills.ts` and `embed_delegation.ts`) derive from
+Anthropic's `skill-creator` under the Apache License 2.0 (terms in each of those
+skill folders' `LICENSE.txt`). Everything else, including skills you add, is
+covered by The Unlicense.
 ```
 

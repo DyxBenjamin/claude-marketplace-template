@@ -11,11 +11,12 @@
     {
       "name": "base-plugin",
       "source": "./plugins/base-plugin",
-      "description": "Example plugin: the skill-creator skill and a sample hook.",
+      "description": "Example plugin: skills that write, test, tune and package skills, and a sample hook.",
       "keywords": [
         "base",
         "skills",
-        "skill-creator",
+        "skill-authoring",
+        "evals",
         "starter"
       ]
     },
